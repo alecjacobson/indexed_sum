@@ -1,0 +1,7 @@
+indexed_sum.egg-info
+.*.un~
+.*.swp
+.*.swo
+*~
+dist/
+build/

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "indexed_sum"
+version = "0.1.0"
+description = "A module for computing sparse Hessians using indexed sums in PyTorch."
+readme = "README.md"
+authors = [
+    {name = "Alec Jacobson", email = "alecjacobson@gmail.com"}
+]
+license = {text = "MIT"}
+dependencies = [
+    "torch"
+]
+requires-python = ">=3.7"
+
+[tool.setuptools]
+packages = ["indexed_sum"]
+
+[tool.setuptools.package-data]
+indexed_sum = ["*.py"]
+
+[tool.setuptools.dynamic]
+version = {attr = "indexed_sum.__version__"}
+
+[project.urls]
+"Homepage" = "https://github.com/alecjacobson/indexed_sum"
