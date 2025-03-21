@@ -60,7 +60,7 @@ The alternative would be to use pytorch to compute the Hessian but this will be
 dense:
 
 ```python
-H_dense = torch.func.hessian(lambda X: total_energy_function(X))(X)
+H_dense = torch.func.hessian(lambda X: sum([spring(X[edge]) for edge in E]))(X)
 ```
 
 For small examples this doesn't matter, but if the number of variables in X is
