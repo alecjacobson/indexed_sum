@@ -23,7 +23,7 @@ $$
 
 where each $\frac{\partial^2 g}{\partial x^2}$ is a (dense) $m \times m$ matrix.
 
-The `indexed_sum` class is a thin wrapper around pytorch's autograd machinery.
+The `IndexedSum` class is a thin wrapper around pytorch's autograd machinery.
 
 This provides similar functionality to the C++ library [TinyAD](https://github.com/patr-schm/TinyAD).
 
