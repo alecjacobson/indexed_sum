@@ -27,6 +27,14 @@ The `IndexedSum` class is a thin wrapper around pytorch's autograd machinery.
 
 This provides similar functionality to the C++ library [TinyAD](https://github.com/patr-schm/TinyAD).
 
+## Installation
+
+Try it out with:
+
+```
+pip install git+https://github.com/alecjacobson/indexed_sum.git
+```
+
 ## Simple Example
 
 Let's consider a very small mass-spring system example
