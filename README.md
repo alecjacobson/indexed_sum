@@ -116,7 +116,7 @@ H = total_energy_function.sparse_hessian(X)
 
 ## Complex Example
 
-![](neohookean-elasticity.mov)
+https://github.com/user-attachments/assets/a0d45b90-37ae-474e-9fc6-ecc735ee6c67
 
 In [examples/neohookean_elasticity.py](examples/neohookean_elasticity.py), we
 build out a Newton-Raphson solver for a 2D neohookean material elasticity
