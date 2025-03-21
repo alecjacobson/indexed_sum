@@ -1,6 +1,6 @@
 # indexed_sum: fast sparse Hessians in pytorch
 
-A python class to use pytorch to construct the sparse Hessian of functions of
+This small library provides a python class `IndexedSum` to use pytorch to construct the sparse Hessian of functions of
 the form:
 
 $$
