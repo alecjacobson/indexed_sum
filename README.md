@@ -72,7 +72,7 @@ We support constant (non-differentiated) parameters to the local summands, in
 the form:
 
 $$
-f(x) = \sum_i g(S_i x, \, S_i k, \, c_i)
+f(x) = \sum_i g(S_i x, S_i k,  c_i)
 $$
 
 where $k$ is a matrix of constant parameters where each row corresponds to a row
