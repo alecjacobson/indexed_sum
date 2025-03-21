@@ -12,10 +12,11 @@ where $g : \mathbb{R}^m \to \mathbb{R}$ is a scalar function conducting the
 rows of $x$ that are relevant to the $i$-th local summand. These types of energies are very common for problems defined on graphs or meshes (e.g., Finite Element Methods or Finite Volume Methods).
 
 The Hessian of $f$ is then:
+
 $$
-\frac{\partial^2 f}{\partial x^2}
-= \sum_i S_i^T \frac{\partial^2 g}{\partial x^2} S_i
+\frac{\partial^2 f}{\partial x^2} = \sum_i S_i^T \frac{\partial^2 g}{\partial x^2} S_i
 $$
+
 where each $\frac{\partial^2 g}{\partial x^2}$ is a (dense) $m \times m$ matrix.
 
 The `IndexedSum` class is a thin wrapper around pytorch's autograd machinery.
