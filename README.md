@@ -1,4 +1,4 @@
-# `indexed_sum` 
+# indexed_sum: fast sparse Hessians in pytorch
 
 A python class to use pytorch to construct the sparse Hessian of functions of
 the form:
