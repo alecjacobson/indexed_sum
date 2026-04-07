@@ -209,3 +209,4 @@ H = total_energy_func.sparse_hessian(x)
 ```
 
 
+_You might also be interested in https://github.com/alecjacobson/tinyremo_
