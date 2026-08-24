@@ -1,4 +1,5 @@
 from indexed_sum import IndexedSum
+from indexed_sum.det import det  # vmap/forward-mode-safe determinant (see below)
 import torch
 import polyscope as ps
 import numpy as np
@@ -93,11 +94,11 @@ def stable_neohookean(x,X,scale):
     mu = youngs_modulus / (2.0 * (1.0 + poissons_ratio))
     lam = youngs_modulus * poissons_ratio / ((1.0 + poissons_ratio) * (1.0 - 2.0 * poissons_ratio))
     J = m @ torch.inverse(M)
-    A = 0.5 * torch.det(M)
+    A = 0.5 * det(M)
     Ic = torch.trace(J.T @ J)
-    # https://github.com/pytorch/pytorch/issues/149694
-    det2 = lambda J: J[0,0] * J[1,1] - J[0,1] * J[1,0]
-    detF = det2(J)
+    # Use indexed_sum.det.det, NOT torch.linalg.det: forward-mode AD of torch.det is wrong
+    # under vmap (pytorch#149694), which would silently corrupt the sparse Hessian.
+    detF = det(J)
     alpha = 1.0 + mu / lam
     W = mu / 2.0 * (Ic - 2.0) + lam / 2.0 * (detF - alpha) * (detF - alpha)
     return scale * A * W

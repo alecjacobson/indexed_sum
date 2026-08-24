@@ -1,0 +1,151 @@
+workload,N,dtype,device,variant,ms,speedup,compile_s,maxdiff,ok,note
+spring,1000,float32,cuda,eager_fwd(lib),2.907008107503255,1.0,0.0,0.0,True,baseline
+spring,1000,float32,cuda,eager_rev,1.5026816050211589,1.9345469444688665,0.0,0.0,True,
+spring,1000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,1000,float32,cuda,compiled_rev[default],0.12705386479695638,22.880123419692254,0.9222999606281519,0.0,True,
+spring,1000,float32,cuda,compiled_rev[reduce-overhead],0.08310293356577556,34.98081214187671,0.37027113884687424,0.0,True,
+spring,10000,float32,cuda,eager_fwd(lib),3.0157440185546873,1.0,0.0,0.0,True,baseline
+spring,10000,float32,cuda,eager_rev,1.4033631642659505,2.148940556047811,0.0,0.0,True,
+spring,10000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,10000,float32,cuda,compiled_rev[default],0.09381226698557536,32.146585041148086,0.3271543085575104,0.0,True,
+spring,10000,float32,cuda,compiled_rev[reduce-overhead],0.08371840318044027,36.02247419906926,0.4380091708153486,0.0,True,
+spring,100000,float32,cuda,eager_fwd(lib),2.850572713216146,1.0,0.0,0.0,True,baseline
+spring,100000,float32,cuda,eager_rev,1.4734240214029948,1.9346587756196818,0.0,0.0,True,
+spring,100000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,100000,float32,cuda,compiled_rev[default],0.09458986918131511,30.136131256847495,0.3197428546845913,0.0,True,
+spring,100000,float32,cuda,compiled_rev[reduce-overhead],0.08231680393218994,34.62929289096744,0.2877591922879219,0.0,True,
+spring,1000,float64,cuda,eager_fwd(lib),2.768169657389323,1.0,0.0,0.0,True,baseline
+spring,1000,float64,cuda,eager_rev,1.431174341837565,1.9341945816574062,0.0,0.0,True,
+spring,1000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,1000,float64,cuda,compiled_rev[default],0.09543573061625163,29.005589830083355,0.30646991916000843,0.0,True,
+spring,1000,float64,cuda,compiled_rev[reduce-overhead],0.08375253677368164,33.05177089584218,0.4294830560684204,0.0,True,
+spring,10000,float64,cuda,eager_fwd(lib),2.759338633219401,1.0,0.0,0.0,True,baseline
+spring,10000,float64,cuda,eager_rev,1.4268042246500652,1.9339293965828774,0.0,0.0,True,
+spring,10000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,10000,float64,cuda,compiled_rev[default],0.0952789306640625,28.96063813885953,0.3068251274526119,0.0,True,
+spring,10000,float64,cuda,compiled_rev[reduce-overhead],0.0821237325668335,33.599771308175875,0.28584078326821327,0.0,True,
+spring,100000,float64,cuda,eager_fwd(lib),2.789694976806641,1.0,0.0,0.0,True,baseline
+spring,100000,float64,cuda,eager_rev,1.4210496266682944,1.963122838536743,0.0,0.0,True,
+spring,100000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,100000,float64,cuda,compiled_rev[default],0.09554666678110758,29.197198298897085,0.3080145809799433,0.0,True,
+spring,100000,float64,cuda,compiled_rev[reduce-overhead],0.08352213700612386,33.400665701382856,0.4275765586644411,0.0,True,
+area,1000,float32,cuda,eager_fwd(lib),4.964249674479166,1.0,0.0,0.0,True,baseline
+area,1000,float32,cuda,eager_rev,4.25719477335612,1.166084696323548,0.0,nan,True,
+area,1000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,1000,float32,cuda,compiled_rev[default],0.15325120290120442,32.39289206545048,0.39383866637945175,nan,False,
+area,1000,float32,cuda,compiled_rev[reduce-overhead],0.09831146399180095,50.495125114739196,0.3599102273583412,nan,False,
+area,10000,float32,cuda,eager_fwd(lib),5.008056640625,1.0,0.0,0.0,True,baseline
+area,10000,float32,cuda,eager_rev,4.323793029785156,1.1582554035602959,0.0,nan,True,
+area,10000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,10000,float32,cuda,compiled_rev[default],0.15295999844868977,32.74095640308826,0.39755926094949245,nan,False,
+area,10000,float32,cuda,compiled_rev[reduce-overhead],0.0993717352549235,50.397194209979034,0.5071044843643904,nan,False,
+area,100000,float32,cuda,eager_fwd(lib),4.99224853515625,1.0,0.0,0.0,True,baseline
+area,100000,float32,cuda,eager_rev,4.334285990397135,1.1518041371097498,0.0,nan,True,
+area,100000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,100000,float32,cuda,compiled_rev[default],0.1584170659383138,31.513325320014367,0.39124751277267933,nan,False,
+area,100000,float32,cuda,compiled_rev[reduce-overhead],0.13772053718566896,36.24912186064097,0.364544989541173,nan,False,
+area,1000,float64,cuda,eager_fwd(lib),4.939260864257813,1.0,0.0,0.0,True,baseline
+area,1000,float64,cuda,eager_rev,4.280521647135417,1.1538922756209475,0.0,nan,True,
+area,1000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,1000,float64,cuda,compiled_rev[default],0.1635466734568278,30.2009252763044,0.4029296413064003,nan,False,
+area,1000,float64,cuda,compiled_rev[reduce-overhead],0.09747412999471029,50.67253090154132,0.37608284689486027,nan,False,
+area,10000,float64,cuda,eager_fwd(lib),4.966142781575521,1.0,0.0,0.0,True,baseline
+area,10000,float64,cuda,eager_rev,4.308061726888021,1.1527557162378155,0.0,nan,True,
+area,10000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,10000,float64,cuda,compiled_rev[default],0.18808426856994628,26.40381792339359,0.4035071302205324,nan,False,
+area,10000,float64,cuda,compiled_rev[reduce-overhead],0.20143680572509765,24.65360172734696,0.3768966980278492,nan,False,
+area,100000,float64,cuda,eager_fwd(lib),5.023815409342448,1.0,0.0,0.0,True,baseline
+area,100000,float64,cuda,eager_rev,4.359189351399739,1.1524655169496816,0.0,nan,True,
+area,100000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,100000,float64,cuda,compiled_rev[default],1.1748789469401042,4.276028115429805,0.40349200926721096,nan,False,
+area,100000,float64,cuda,compiled_rev[reduce-overhead],1.199932861328125,4.186747084984342,0.38974408246576786,nan,False,
+neohookean,1000,float32,cuda,eager_fwd(lib),7.340038553873698,1.0,0.0,0.0,True,baseline
+neohookean,1000,float32,cuda,eager_rev,7.2353973388671875,1.0144624006264864,0.0,0.00026128117581238677,True,
+neohookean,1000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,1000,float32,cuda,compiled_rev[default],2.7850847880045575,2.6354811837282157,0.5544623285531998,0.00026128117581238677,False,
+neohookean,1000,float32,cuda,compiled_rev[reduce-overhead],nan,nan,nan,nan,False,CUDA-graph capture fails (CPU sync)
+neohookean,10000,float32,cuda,eager_fwd(lib),9.42174072265625,1.0,0.0,0.0,True,baseline
+neohookean,10000,float32,cuda,eager_rev,17.30027058919271,0.5446007722296499,0.0,1.415702577923087e-05,True,
+neohookean,10000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,10000,float32,cuda,compiled_rev[default],14.707497151692708,0.6406080263338271,0.5524241924285889,1.415702577923087e-05,True,
+neohookean,10000,float32,cuda,compiled_rev[reduce-overhead],nan,nan,nan,nan,False,CUDA-graph capture fails (CPU sync)
+neohookean,100000,float32,cuda,eager_fwd(lib),83.43575846354166,1.0,0.0,0.0,True,baseline
+neohookean,100000,float32,cuda,eager_rev,147.23995768229167,0.5666651891029194,0.0,9.516659441054869e-07,True,
+neohookean,100000,float32,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,100000,float32,cuda,compiled_rev[default],138.551025390625,0.6022023888188943,0.7020712625235319,9.516659441054869e-07,True,
+neohookean,100000,float32,cuda,compiled_rev[reduce-overhead],nan,nan,nan,nan,False,CUDA-graph capture fails (CPU sync)
+neohookean,1000,float64,cuda,eager_fwd(lib),8.508731587727864,1.0,0.0,0.0,True,baseline
+neohookean,1000,float64,cuda,eager_rev,10.732712809244791,0.7927848009124714,0.0,7.373944889060833e-16,True,
+neohookean,1000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,1000,float64,cuda,compiled_rev[default],5.92763926188151,1.4354334351019669,0.7380234841257334,7.373944889060833e-16,True,
+neohookean,1000,float64,cuda,compiled_rev[reduce-overhead],nan,nan,nan,nan,False,CUDA-graph capture fails (CPU sync)
+neohookean,10000,float64,cuda,eager_fwd(lib),26.435552978515624,1.0,0.0,0.0,True,baseline
+neohookean,10000,float64,cuda,eager_rev,55.43334147135417,0.47688903964370444,0.0,4.105607700503676e-06,True,
+neohookean,10000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,10000,float64,cuda,compiled_rev[default],42.14901936848958,0.6271925984185227,0.5991375837475061,4.105607700503676e-06,False,
+neohookean,10000,float64,cuda,compiled_rev[reduce-overhead],nan,nan,nan,nan,False,CUDA-graph capture fails (CPU sync)
+neohookean,100000,float64,cuda,eager_fwd(lib),255.61730143229167,1.0,0.0,0.0,True,baseline
+neohookean,100000,float64,cuda,eager_rev,537.3549153645833,0.4756954744870269,0.0,2.562569958396809e-06,True,
+neohookean,100000,float64,cuda,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,100000,float64,cuda,compiled_rev[default],415.96569010416664,0.614515349495002,11.895274430513382,2.562569958396809e-06,False,
+neohookean,100000,float64,cuda,compiled_rev[reduce-overhead],nan,nan,nan,nan,False,CUDA-graph capture fails (CPU sync)
+spring,1000,float32,cpu,eager_fwd(lib),2.6694726198911667,1.0,0.0,0.0,True,baseline
+spring,1000,float32,cpu,eager_rev,1.4063840731978416,1.898110673154389,0.0,0.0,True,
+spring,1000,float32,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,1000,float32,cpu,compiled_rev[default],0.07006358355283737,38.10071487248472,8.543793853372335,0.0,True,
+spring,1000,float32,cpu,compiled_rev[reduce-overhead],0.07994696497917175,33.39054360083129,1.1319742854684591,0.0,True,
+spring,10000,float32,cpu,eager_fwd(lib),179.65841833502054,1.0,0.0,0.0,True,baseline
+spring,10000,float32,cpu,eager_rev,90.04332646727562,1.9952441272848096,0.0,0.0,True,
+spring,10000,float32,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,10000,float32,cpu,compiled_rev[default],0.11683441698551178,1537.7182766042247,0.3148747645318508,0.0,True,
+spring,10000,float32,cpu,compiled_rev[reduce-overhead],0.10317619889974594,1741.2777389637188,0.4921331647783518,0.0,True,
+spring,1000,float64,cpu,eager_fwd(lib),2.787012606859207,1.0,0.0,0.0,True,baseline
+spring,1000,float64,cpu,eager_rev,1.4194479212164879,1.9634482993012494,0.0,0.0,True,
+spring,1000,float64,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,1000,float64,cpu,compiled_rev[default],0.05770139396190643,48.30061139769257,1.076081182807684,0.0,True,
+spring,1000,float64,cpu,compiled_rev[reduce-overhead],0.06309319287538528,44.172952419190565,1.0367239229381084,0.0,True,
+spring,10000,float64,cpu,eager_fwd(lib),210.1324675604701,1.0,0.0,0.0,True,baseline
+spring,10000,float64,cpu,eager_rev,130.1217844709754,1.6148907611034313,0.0,0.0,True,
+spring,10000,float64,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+spring,10000,float64,cpu,compiled_rev[default],0.10845120996236801,1937.5760550148307,1.4605694264173508,0.0,True,
+spring,10000,float64,cpu,compiled_rev[reduce-overhead],0.13458188623189926,1561.372584705708,1.2980522364377975,0.0,True,
+area,1000,float32,cpu,eager_fwd(lib),179.4833481311798,1.0,0.0,0.0,True,baseline
+area,1000,float32,cpu,eager_rev,200.05433354526758,0.8971730077047642,0.0,nan,True,
+area,1000,float32,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,1000,float32,cpu,compiled_rev[default],10.195481777191162,17.604204691210498,7.910641076043248,nan,False,
+area,1000,float32,cpu,compiled_rev[reduce-overhead],10.149856843054295,17.68333789397267,24.501061886548996,nan,False,
+area,10000,float32,cpu,eager_fwd(lib),530.2202712744474,1.0,0.0,0.0,True,baseline
+area,10000,float32,cpu,eager_rev,539.9579655379057,0.9819658290367889,0.0,nan,True,
+area,10000,float32,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,10000,float32,cpu,compiled_rev[default],9.999883733689785,53.02264360215769,10.793253203853965,nan,False,
+area,10000,float32,cpu,compiled_rev[reduce-overhead],10.0150803104043,52.94218866359174,6.77600315771997,nan,False,
+area,1000,float64,cpu,eager_fwd(lib),200.00197906047106,1.0,0.0,0.0,True,baseline
+area,1000,float64,cpu,eager_rev,250.02565253525972,0.7999258357390584,0.0,nan,True,
+area,1000,float64,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,1000,float64,cpu,compiled_rev[default],20.020992122590542,9.98961379315465,21.945333395153284,nan,False,
+area,1000,float64,cpu,compiled_rev[reduce-overhead],20.145761221647263,9.927744941479926,15.52738225646317,nan,False,
+area,10000,float64,cpu,eager_fwd(lib),779.9652252346277,1.0,0.0,0.0,True,baseline
+area,10000,float64,cpu,eager_rev,739.9614151567221,1.0540620216926215,0.0,8.839968784683757e-15,True,
+area,10000,float64,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+area,10000,float64,cpu,compiled_rev[default],19.91237886250019,39.169866675422206,10.231719372794032,1.4652248260613328e-12,True,
+area,10000,float64,cpu,compiled_rev[reduce-overhead],19.866200722754,39.26091536673567,7.813168048858643,1.4652248260613328e-12,True,
+neohookean,1000,float32,cpu,eager_fwd(lib),620.1253667473793,1.0,0.0,0.0,True,baseline
+neohookean,1000,float32,cpu,eager_rev,719.8315039277077,0.861486838744499,0.0,nan,True,
+neohookean,1000,float32,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,1000,float32,cpu,compiled_rev[default],420.12821435928345,1.47603837484017,12.579376498237252,nan,False,
+neohookean,1000,float32,cpu,compiled_rev[reduce-overhead],429.7182537615299,1.443097567578581,12.80364403873682,nan,False,
+neohookean,10000,float32,cpu,eager_fwd(lib),1599.9533016234636,1.0,0.0,0.0,True,baseline
+neohookean,10000,float32,cpu,eager_rev,1600.0896034762263,0.9999148161125061,0.0,nan,True,
+neohookean,10000,float32,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,10000,float32,cpu,compiled_rev[default],849.9462807551026,1.8824169689901409,1.982129855081439,nan,False,
+neohookean,10000,float32,cpu,compiled_rev[reduce-overhead],760.0471951067448,2.1050709902281244,1.6946036275476217,nan,False,
+neohookean,1000,float64,cpu,eager_fwd(lib),749.6558245271444,1.0,0.0,0.0,True,baseline
+neohookean,1000,float64,cpu,eager_rev,769.950539432466,0.9736415342727327,0.0,0.9999999999999998,True,
+neohookean,1000,float64,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,1000,float64,cpu,compiled_rev[default],330.0851272419095,2.271098461148612,8.155301602557302,0.9999999999999998,False,
+neohookean,1000,float64,cpu,compiled_rev[reduce-overhead],389.9014737457037,1.9226801512837444,6.095896089449525,0.9999999999999998,False,
+neohookean,10000,float64,cpu,eager_fwd(lib),1650.2302892506123,1.0,0.0,0.0,True,baseline
+neohookean,10000,float64,cpu,eager_rev,1520.1047006994486,1.0856030433241137,0.0,1.0000014228315277,True,
+neohookean,10000,float64,cpu,compiled_fwd,nan,nan,nan,nan,False,fwd-over-rev does NOT compile: RuntimeError when making fake tensor cal
+neohookean,10000,float64,cpu,compiled_rev[default],640.0430491194129,2.5783113987739417,9.044527672231197,1.0000014228315277,False,
+neohookean,10000,float64,cpu,compiled_rev[reduce-overhead],709.8693400621414,2.324695822341267,5.79811286740005,1.0000014228315277,False,
