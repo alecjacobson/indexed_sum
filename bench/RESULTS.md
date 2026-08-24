@@ -213,14 +213,14 @@ _(Abridged; full grid — all N/dtype/device, both neohookean variants — in `b
    Hessian while leaving the fast, well-tested forward-over-reverse `sparse_hessian` path
    unchanged — a surgical fix, versus globally swapping the core AD strategy to reverse-mode
    (also correct, but a far larger blast radius). Regression-tested in `tests/test_det.py`.
-2. **Speed (optional, situational):** `torch.compile` is worth adding as an opt-in for
+2. **Speed (opt-in, wired in):** `IndexedSum(..., compile=True)` (or
+   `compile="reduce-overhead"`) enables the compiled reverse-over-reverse path. It pays off for
    **cheap, CUDA-graph-capturable summands on GPU inside a repeated-call loop** (fixed shapes),
-   where `mode="reduce-overhead"` (CUDA graphs) gives ~an order of magnitude — spring/area **and
-   neohookean, once it uses the elementary `det` helper** (~20–88× on the L40). It requires the
-   reverse-over-reverse formulation (the only one that compiles) and a summand free of host
-   syncs — which is exactly why `torch.linalg.det` must be replaced by the helper (it both
-   corrupts the eager Hessian *and* blocks CUDA-graph capture). Keep eager as the default; the
-   compile path is not yet wired into `IndexedSum` (it lives in `bench/` as the study).
+   where `"reduce-overhead"` (CUDA graphs) gives ~an order of magnitude — spring/area **and
+   neohookean, once it uses the elementary `det` helper** (~20–88× on the L40). It needs a
+   summand free of host syncs — which is exactly why `torch.linalg.det` must be replaced by the
+   helper (it both corrupts the eager Hessian *and* blocks CUDA-graph capture). `compile=False`
+   remains the default.
 
 ## Reproduce
 

@@ -166,9 +166,9 @@ def _fd_hessian(fn, x, eps=1e-6):
         z = z.detach().requires_grad_(True)
         return torch.autograd.grad(fn(z), z)[0]
 
-    H = torch.zeros(n, n, dtype=x.dtype)
+    H = torch.zeros(n, n, dtype=x.dtype, device=x.device)
     for i in range(n):
-        e = torch.zeros(n, dtype=x.dtype)
+        e = torch.zeros(n, dtype=x.dtype, device=x.device)
         e[i] = eps
         H[i] = (grad(x + e) - grad(x - e)) / (2 * eps)
     return 0.5 * (H + H.T)
@@ -210,3 +210,54 @@ def test_forward_over_reverse_still_uncompilable():
     V, idx = _cloud_inputs(2, 2, "cpu", torch.float64)
     with pytest.raises(Exception):
         torch.compile(lambda s: vmap(hessian(reshaped))(s), fullgraph=False)(V[idx])
+
+
+# ---------------------------------------------------------------- IndexedSum(compile=...) API
+def _det_energy(v):  # det via the vmap-safe helper, so both eager and compiled are correct
+    from indexed_sum.det import det
+    F = v[1:] - v[0:1]
+    J = det(F)
+    return (F * F).sum() - 3 - 2 * torch.log(torch.clamp(J, min=1e-3)) + (J - 1) ** 2
+
+
+_COMPILE_MODES = [True] + (["reduce-overhead"] if torch.cuda.is_available() else [])
+
+
+@pytest.mark.parametrize("device", DEVICES)
+@pytest.mark.parametrize("compile_opt", _COMPILE_MODES)
+@pytest.mark.parametrize("name,fn,local_size,dim", SMOOTH_WORKLOADS)
+def test_indexed_sum_compile_option_matches_eager(name, fn, local_size, dim, compile_opt, device):
+    """IndexedSum(compile=True | "reduce-overhead").sparse_hessian == the eager default."""
+    V, idx = _cloud_inputs(local_size, dim, device, torch.float64)
+    Vg = V.clone().requires_grad_(True)
+
+    H_eager = IndexedSum(fn, idx, compile=False).sparse_hessian(Vg).coalesce()
+    obj = IndexedSum(fn, idx, compile=compile_opt)
+    H1 = obj.sparse_hessian(Vg).coalesce()
+    H2 = obj.sparse_hessian(Vg).coalesce()  # reuse compiled kernel; clone must keep H1 valid
+
+    assert H1._nnz() == H_eager._nnz()
+    assert _reldiff(H_eager.to_dense(), H1.to_dense()) < _rtol(torch.float64)
+    # H1 must not be corrupted by H2 (CUDA-graph memory reuse) -> the .clone() in _batched_hessian
+    assert _reldiff(H1.to_dense(), H2.to_dense()) < 1e-9
+
+
+@pytest.mark.parametrize("compile_opt", _COMPILE_MODES)
+def test_indexed_sum_compile_correct_for_det_energy(compile_opt):
+    """End-to-end: a det-helper energy assembles a correct sparse Hessian with compile enabled,
+    verified against finite differences on the total energy."""
+    device = "cuda" if (compile_opt == "reduce-overhead") else "cpu"
+    g = torch.Generator().manual_seed(0)
+    Nv = 16
+    V = torch.randn(Nv, 3, generator=g, dtype=torch.float64).to(device)
+    idx = torch.stack([torch.randperm(Nv, generator=g)[:4] for _ in range(12)]).to(device)
+    Vg = V.clone().requires_grad_(True)
+
+    H = IndexedSum(_det_energy, idx, compile=compile_opt).sparse_hessian(Vg).coalesce().to_dense()
+
+    def total(z):
+        z = z.view(Nv, 3)
+        return sum(_det_energy(z[idx[i]]) for i in range(idx.shape[0]))
+
+    Hfd = _fd_hessian(total, V.reshape(-1))  # device-aware
+    assert _reldiff(Hfd, H) < 1e-4

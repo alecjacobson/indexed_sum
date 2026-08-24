@@ -1,5 +1,5 @@
 import torch
-from torch.func import vmap, hessian
+from torch.func import vmap, hessian, jacrev
 
 class IndexedSum:
     """
@@ -21,9 +21,36 @@ class IndexedSum:
         all_indices (tensor or array-like): The indices defining the structure of the sum.
         per_variable_constants (tensor, optional): A tensor of shape `(num_vars, k_dim)`, containing constants associated with variables.
         per_term_constants (tensor, optional): A tensor of shape `(sum-length, |c|)`, containing constants specific to each term.
+        compile (bool or str, optional): Speed up `sparse_hessian` with `torch.compile`. See below.
+
+    ``torch.compile`` for the sparse Hessian
+    ----------------------------------------
+    `sparse_hessian` computes a batched per-element Hessian, which is many small autograd
+    graphs -- a workload dominated by kernel-launch overhead. `torch.compile` fuses those
+    launches (and, on GPU, can replay them from a CUDA graph), giving large speedups for cheap
+    summands inside a repeated-call loop (e.g. Newton iterations at fixed shapes): ~30-50x on an
+    L40, up to ~85x for the cheapest, with `compile="reduce-overhead"`. See `bench/RESULTS.md`.
+
+    Pass `compile=`:
+      * ``False`` (default) -- eager, unchanged behavior.
+      * ``True``            -- compile with a robust default mode (Inductor fusion).
+      * a mode string       -- e.g. ``"reduce-overhead"`` (CUDA graphs; fastest when the summand
+                               is capturable) or ``"max-autotune"``. Same values as `torch.compile`'s
+                               ``mode=``.
+
+    Notes / caveats:
+      * The compiled path uses a reverse-over-reverse Hessian (``jacrev(jacrev(g))``); the eager
+        default uses forward-over-reverse (``torch.func.hessian``). They are mathematically equal
+        (differing only at floating-point rounding).
+      * ``"reduce-overhead"`` cannot capture summands that trigger a host<->device sync -- notably
+        `torch.linalg.det`/`slogdet`. Use `indexed_sum.det.det`/`logabsdet` instead (which are also
+        required for a *correct* Hessian, independent of compile: see `indexed_sum/det.py`).
+      * First call pays a one-time compilation cost; shapes should be stable across calls to avoid
+        recompilation.
     """
-    
-    def __init__(self, local_summand, all_indices, per_variable_constants=None, per_term_constants=None):
+
+    def __init__(self, local_summand, all_indices, per_variable_constants=None, per_term_constants=None,
+                 compile=False):
         """
         Initializes a vectorized summed function.
 
@@ -32,11 +59,15 @@ class IndexedSum:
         - all_indices: Tensor of shape `[sum-length, local indices size]` specifying subsets of V.
         - per_variable_constants: Tensor of shape `[num_vars, k_dim]` containing constants per variable.
         - per_term_constants: Tensor of shape `[sum-length, |c|]` containing constants for each term.
+        - compile: False (eager, default), True (torch.compile with a default mode), or a
+          torch.compile mode string like "reduce-overhead". See the class docstring.
         """
         self.local_summand = local_summand
         self.all_indices = all_indices
         self.set_per_variable_constants(per_variable_constants)
         self.set_per_term_constants(per_term_constants)
+        self.compile = compile
+        self._compiled_blocks = None  # lazily-built compiled batched-Hessian kernel
 
     # set per_variable_constants
     def set_per_variable_constants(self, per_variable_constants):
@@ -90,14 +121,10 @@ class IndexedSum:
         sum_length, local_size = self.all_indices.shape
         dof = num_vars * dim  # Total degrees of freedom
 
-        def reshaped_summand(inputs, *args):
-            """Reshape input for Hessian computation."""
-            split_inputs = inputs.view(local_size, dim)  # Reshape to (local_size, feature_dim)
-            return self.local_summand(split_inputs, *args)
-
         args = self.prepare_args(V)
-        batched_hessian = vmap(hessian(reshaped_summand))(*args)  # Shape: (sum-length, local_size * dim, local_size * dim)
-        
+        # Shape: (sum-length, local_size * dim, local_size * dim)
+        batched_hessian = self._batched_hessian(args, local_size, dim)
+
         # Compute global indices efficiently
         global_indices = (dim * self.all_indices[:, :, None] + torch.arange(dim, device=V.device)).reshape(sum_length, local_size * dim)
         row_indices = global_indices[:, :, None].expand(sum_length, local_size * dim, local_size * dim).reshape(-1)
@@ -110,6 +137,33 @@ class IndexedSum:
             size=(dof, dof)
         )
         return H_sparse
+
+    def _batched_hessian(self, args, local_size, dim):
+        """Compute the batched per-element Hessian blocks, eagerly or via torch.compile.
+
+        Eager uses forward-over-reverse (`torch.func.hessian`). The compiled path uses
+        reverse-over-reverse (`jacrev(jacrev)`) -- mathematically identical, and the only
+        formulation `torch.compile` currently traces. See the class docstring.
+        """
+        def reshaped_summand(inputs, *rest):
+            return self.local_summand(inputs.view(local_size, dim), *rest)
+
+        if not self.compile:
+            return vmap(hessian(reshaped_summand))(*args)
+
+        if self._compiled_blocks is None:
+            mode = None if self.compile is True else self.compile
+
+            def blocks(*a):
+                return vmap(jacrev(jacrev(reshaped_summand)))(*a)
+
+            # dynamic=False: specialize on concrete shapes. The batched functorch Hessian can't
+            # trace with symbolic sizes, and shapes are fixed per problem, so static is correct.
+            self._compiled_blocks = torch.compile(blocks, mode=mode, dynamic=False)
+
+        # Clone: `mode="reduce-overhead"` returns tensors backed by reused CUDA-graph memory,
+        # which the next call would overwrite; clone before it escapes into the sparse tensor.
+        return self._compiled_blocks(*args).clone()
 
     def __add__(self, other):
         if isinstance(other, IndexedSum):

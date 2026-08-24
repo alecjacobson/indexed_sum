@@ -209,4 +209,48 @@ H = total_energy_func.sparse_hessian(x)
 ```
 
 
+## Determinants in summands (important)
+
+`sparse_hessian` differentiates each `local_summand` with `torch.func.hessian`
+(forward-over-reverse) under `vmap`. PyTorch's forward-mode autodiff of
+`torch.linalg.det` / `torch.det` / `torch.linalg.slogdet` is **wrong under
+`vmap`** (an open upstream bug, [pytorch#149694](https://github.com/pytorch/pytorch/issues/149694)),
+so a summand that calls `torch.linalg.det` silently produces an **incorrect
+Hessian** (verified off finite differences by >100×). The symptom is
+data-dependent, so it can hide in small tests.
+
+Use the drop-in, `vmap`-safe helpers instead — they compute the determinant with
+elementary ops, which differentiate correctly:
+
+```python
+from indexed_sum.det import det, logabsdet   # instead of torch.linalg.det / slogdet
+
+def neohookean(v):
+    F = v[1:] - v[0:1]
+    J = det(F)                                # NOT torch.linalg.det(F)
+    return (F*F).sum() - 3 - 2*torch.log(torch.clamp(J, min=1e-3)) + (J-1)**2
+```
+
+Only the determinant family is affected; `torch.inverse`, matmul, `trace`,
+elementwise ops, etc. are fine.
+
+## Speeding up with `torch.compile`
+
+`sparse_hessian` is many small per-element autograd graphs, a workload dominated
+by kernel-launch overhead. Pass `compile=` to fuse those launches (and, on GPU,
+replay them from a CUDA graph):
+
+```python
+f = IndexedSum(neohookean, T, compile=True)               # Inductor fusion
+f = IndexedSum(neohookean, T, compile="reduce-overhead")  # + CUDA graphs (fastest)
+H = f.sparse_hessian(x)                                    # first call compiles; then reused
+```
+
+This helps most for cheap summands on GPU inside a repeated-call loop (e.g. Newton
+iterations at fixed shapes): ~30–50× on an L40, up to ~85× with
+`"reduce-overhead"`. `compile=False` is the default. Note `"reduce-overhead"`
+(CUDA graphs) requires a summand free of host↔device syncs — another reason to
+use `indexed_sum.det.det` rather than `torch.linalg.det`. See `bench/RESULTS.md`
+for the full study.
+
 _You might also be interested in https://github.com/alecjacobson/tinyremo and https://github.com/alecjacobson/pytorch-sparse-solve_
