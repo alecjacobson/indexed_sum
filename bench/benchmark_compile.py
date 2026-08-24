@@ -27,8 +27,14 @@ import statistics
 import sys
 import time
 
+import os
+import sys
+
 import torch
 from torch.func import vmap, hessian, jacrev
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from indexed_sum.det import det as det_helper  # noqa: E402
 
 
 # --------------------------------------------------------------------------------------
@@ -49,20 +55,34 @@ def area(v):
     return torch.sqrt(torch.clamp(s * (s - a) * (s - b) * (s - c), min=1e-12))
 
 
-def neohookean(v):
-    # Uses det + log: heavy per-element compute AND det forces a host copy -> NOT
-    # CUDA-graph capturable; representative of "expensive" elasticity summands.
+def _neohookean(v, detfn):
     F = v[1:] - v[0:1]  # (3,3)
-    J = torch.linalg.det(F)
+    J = detfn(F)
     I1 = (F * F).sum()
     return I1 - 3 - 2 * torch.log(torch.clamp(J, min=1e-3)) + (J - 1) ** 2
+
+
+def neohookean(v):
+    # The RECOMMENDED form: elementary-op determinant (indexed_sum.det.det). Forward-mode
+    # safe (correct Hessian) AND no host sync -> CUDA-graph capturable. Also far cheaper than
+    # torch.linalg.det for tiny 3x3 blocks, so it's overhead-bound like spring/area.
+    return _neohookean(v, det_helper)
+
+
+def neohookean_torchdet(v):
+    # The BUGGY/uncapturable form: torch.linalg.det gives a wrong Hessian under vmap AND forces
+    # a CPU<->CUDA sync, so mode="reduce-overhead" (CUDA graphs) cannot capture it. Kept to
+    # document the contrast; see indexed_sum/det.py and bench/RESULTS.md.
+    return _neohookean(v, torch.linalg.det)
 
 
 WORKLOADS = {
     #  name         fn          local_size  dim  note
     "spring": (spring, 2, 2, "cheap/quadratic, capturable"),
     "area": (area, 3, 3, "cheap/nonquadratic, capturable"),
-    "neohookean": (neohookean, 4, 3, "expensive (det/log), NOT capturable"),
+    "neohookean": (neohookean, 4, 3, "det via indexed_sum.det: correct + capturable"),
+    "neohookean_torchdet": (neohookean_torchdet, 4, 3,
+                            "torch.linalg.det: WRONG Hessian + capture fails (host sync)"),
 }
 
 
@@ -248,7 +268,7 @@ def main():
         modes = ["default", "reduce-overhead"]
         do_maxauto = False
     else:
-        workloads = ["spring", "area", "neohookean"]
+        workloads = ["spring", "area", "neohookean", "neohookean_torchdet"]
         sizes = [1_000, 10_000, 100_000]
         dtypes = [torch.float32, torch.float64]
         iters = 30
