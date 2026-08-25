@@ -12,3 +12,4 @@ bench/sweep.log
 # RXMesh comparison study artifacts
 bench/rxmesh/grids/
 RXMesh.log
+.claude/
