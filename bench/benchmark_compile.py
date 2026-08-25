@@ -6,12 +6,15 @@ The hot path is `vmap(hessian(local_summand))` (indexed_sum/indexed_sum.py). Thi
 A/B-compares the eager baseline against several torch.compile variants across:
   workload (per-element cost) x problem size x dtype x device x compile mode.
 
+The two compiled variants map onto the IndexedSum switches:
+  * compiled[fusion]      == IndexedSum(..., compile=True)      (torch.compile mode="default")
+  * compiled[cuda_graphs] == IndexedSum(..., cuda_graphs=True)  (torch.compile mode="reduce-overhead")
+
 Key facts this harness encodes (established empirically, see bench/RESULTS.md):
   * torch.func.hessian == jacfwd(jacrev(f)) (forward-over-reverse) does NOT compile under
     dynamo in torch 2.11 (`_fw_primal` inference-mode assert). To compile at all we must
-    reformulate the Hessian as jacrev(jacrev(f)) (reverse-over-reverse), which is
-    numerically identical but ~2x slower in eager.
-  * mode="reduce-overhead" (CUDA graphs) can only capture summands with no CPU<->CUDA
+    reformulate the Hessian as jacrev(jacrev(f)) (reverse-over-reverse).
+  * cuda_graphs (mode="reduce-overhead") can only capture summands with no CPU<->CUDA
     syncs; e.g. torch.linalg.det triggers a host copy and capture fails.
 
 Timing uses CUDA events on GPU (device-time) and perf_counter on CPU, median over repeats,
@@ -154,6 +157,9 @@ def measure_compile_time(fn, arg, device):
 # --------------------------------------------------------------------------------------
 COMPILE_MODES = ["default", "reduce-overhead", "max-autotune"]
 
+# torch.compile mode -> the IndexedSum(...) switch it corresponds to (for display).
+MODE_LABEL = {"default": "fusion", "reduce-overhead": "cuda_graphs", "max-autotune": "max-autotune"}
+
 
 def run_config(wl_name, N, dtype, device, iters, modes, do_maxautotune):
     fn, local_size, dim, _note = WORKLOADS[wl_name]
@@ -205,7 +211,7 @@ def run_config(wl_name, N, dtype, device, iters, modes, do_maxautotune):
     for mode in modes:
         if mode == "max-autotune" and not do_maxautotune:
             continue
-        variant = f"compiled_rev[{mode}]"
+        variant = f"compiled[{MODE_LABEL[mode]}]"  # e.g. compiled[fusion], compiled[cuda_graphs]
         try:
             ck = torch.compile(kr, mode=mode, fullgraph=False)
             comp_s = measure_compile_time(ck, sel, device)

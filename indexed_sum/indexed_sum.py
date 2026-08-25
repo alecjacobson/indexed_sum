@@ -21,36 +21,44 @@ class IndexedSum:
         all_indices (tensor or array-like): The indices defining the structure of the sum.
         per_variable_constants (tensor, optional): A tensor of shape `(num_vars, k_dim)`, containing constants associated with variables.
         per_term_constants (tensor, optional): A tensor of shape `(sum-length, |c|)`, containing constants specific to each term.
-        compile (bool or str, optional): Speed up `sparse_hessian` with `torch.compile`. See below.
+        compile (bool, optional): Speed up `sparse_hessian` with `torch.compile`. See below.
+        cuda_graphs (bool, optional): Additionally replay via CUDA graphs. See below.
 
-    ``torch.compile`` for the sparse Hessian
-    ----------------------------------------
+    Speeding up ``sparse_hessian`` (``compile`` / ``cuda_graphs``)
+    -------------------------------------------------------------
     `sparse_hessian` computes a batched per-element Hessian, which is many small autograd
-    graphs -- a workload dominated by kernel-launch overhead. `torch.compile` fuses those
-    launches (and, on GPU, can replay them from a CUDA graph), giving large speedups for cheap
-    summands inside a repeated-call loop (e.g. Newton iterations at fixed shapes): ~30-50x on an
-    L40, up to ~85x for the cheapest, with `compile="reduce-overhead"`. See `bench/RESULTS.md`.
+    graphs -- a workload dominated by kernel-launch overhead. Two opt-in, *layered* switches
+    cut that overhead (both default ``False``, i.e. plain eager):
 
-    Pass `compile=`:
-      * ``False`` (default) -- eager, unchanged behavior.
-      * ``True``            -- compile with a robust default mode (Inductor fusion).
-      * a mode string       -- e.g. ``"reduce-overhead"`` (CUDA graphs; fastest when the summand
-                               is capturable) or ``"max-autotune"``. Same values as `torch.compile`'s
-                               ``mode=``.
+      * ``compile=True`` -- run the batched Hessian through ``torch.compile`` (Inductor kernel
+        fusion). ~30-50x on an L40 for cheap summands.
+      * ``cuda_graphs=True`` -- *also* record the launches into a CUDA graph and replay them
+        (``torch.compile(mode="reduce-overhead")``). Fastest when it applies (up to ~85x), but
+        it can only capture summands with no host<->device sync.
+
+    They are **compatible, not exclusive** -- ``cuda_graphs`` is a refinement of ``compile``, so
+    ``cuda_graphs=True`` implies compilation (setting ``compile=True`` alongside it is optional
+    and harmless). The combinations:
+
+      | compile | cuda_graphs | behavior                                   |
+      |---------|-------------|--------------------------------------------|
+      | False   | False       | eager (unchanged default)                  |
+      | True    | False       | torch.compile, Inductor fusion             |
+      | any     | True        | torch.compile + CUDA graphs (fastest)      |
 
     Notes / caveats:
       * The compiled path uses a reverse-over-reverse Hessian (``jacrev(jacrev(g))``); the eager
         default uses forward-over-reverse (``torch.func.hessian``). They are mathematically equal
         (differing only at floating-point rounding).
-      * ``"reduce-overhead"`` cannot capture summands that trigger a host<->device sync -- notably
+      * ``cuda_graphs=True`` cannot capture summands that trigger a host<->device sync -- notably
         `torch.linalg.det`/`slogdet`. Use `indexed_sum.det.det`/`logabsdet` instead (which are also
         required for a *correct* Hessian, independent of compile: see `indexed_sum/det.py`).
       * First call pays a one-time compilation cost; shapes should be stable across calls to avoid
-        recompilation.
+        recompilation. Best for repeated-call loops (e.g. Newton iterations). See `bench/RESULTS.md`.
     """
 
     def __init__(self, local_summand, all_indices, per_variable_constants=None, per_term_constants=None,
-                 compile=False):
+                 compile=False, cuda_graphs=False):
         """
         Initializes a vectorized summed function.
 
@@ -59,14 +67,16 @@ class IndexedSum:
         - all_indices: Tensor of shape `[sum-length, local indices size]` specifying subsets of V.
         - per_variable_constants: Tensor of shape `[num_vars, k_dim]` containing constants per variable.
         - per_term_constants: Tensor of shape `[sum-length, |c|]` containing constants for each term.
-        - compile: False (eager, default), True (torch.compile with a default mode), or a
-          torch.compile mode string like "reduce-overhead". See the class docstring.
+        - compile: if True, torch.compile the batched Hessian (Inductor fusion).
+        - cuda_graphs: if True, also replay via CUDA graphs (implies compilation). See the
+          class docstring for how compile/cuda_graphs combine.
         """
         self.local_summand = local_summand
         self.all_indices = all_indices
         self.set_per_variable_constants(per_variable_constants)
         self.set_per_term_constants(per_term_constants)
         self.compile = compile
+        self.cuda_graphs = cuda_graphs
         self._compiled_blocks = None  # lazily-built compiled batched-Hessian kernel
 
     # set per_variable_constants
@@ -148,11 +158,12 @@ class IndexedSum:
         def reshaped_summand(inputs, *rest):
             return self.local_summand(inputs.view(local_size, dim), *rest)
 
-        if not self.compile:
+        # cuda_graphs implies compilation; either switch selects the compiled path.
+        if not (self.compile or self.cuda_graphs):
             return vmap(hessian(reshaped_summand))(*args)
 
         if self._compiled_blocks is None:
-            mode = None if self.compile is True else self.compile
+            mode = "reduce-overhead" if self.cuda_graphs else None
 
             def blocks(*a):
                 return vmap(jacrev(jacrev(reshaped_summand)))(*a)
@@ -161,9 +172,10 @@ class IndexedSum:
             # trace with symbolic sizes, and shapes are fixed per problem, so static is correct.
             self._compiled_blocks = torch.compile(blocks, mode=mode, dynamic=False)
 
-        # Clone: `mode="reduce-overhead"` returns tensors backed by reused CUDA-graph memory,
-        # which the next call would overwrite; clone before it escapes into the sparse tensor.
-        return self._compiled_blocks(*args).clone()
+        out = self._compiled_blocks(*args)
+        # CUDA-graph outputs are backed by reused memory the next call overwrites; clone before
+        # the values escape into the returned sparse tensor. (Not needed for plain fusion.)
+        return out.clone() if self.cuda_graphs else out
 
     def __add__(self, other):
         if isinstance(other, IndexedSum):

@@ -13,14 +13,15 @@ library that matters more than the speed.
   example already hand-expands a 2×2 determinant to dodge it, citing pytorch#149694). The
   narrow, low-risk fix is a **vmap-safe determinant helper** (`indexed_sum.det`) used inside
   summands instead of `torch.linalg.det`; the fast default Hessian path is unchanged.
-- **Speed: `torch.compile(mode="reduce-overhead")` — i.e. record the kernel launches into a
-  CUDA graph once and replay them — gives ~an order of magnitude when the Hessian is
+- **Speed: `IndexedSum(..., cuda_graphs=True)` — record the kernel launches into a CUDA graph
+  once and replay them — gives ~an order of magnitude when the Hessian is
   kernel-launch-overhead-bound** (cheap per-element work), which covers spring, area, **and
   neohookean once its determinant uses the elementary `det` helper** (~20–85× on GPU). Two
   things must hold: reverse-over-reverse (the only formulation that compiles), and no host
   syncs in the summand. `torch.linalg.det` violates both — it's the reason the naive
   neohookean can't be captured (and its eager Hessian is wrong too). So the `det` helper is
-  what makes the elasticity case both **correct and compilable**.
+  what makes the elasticity case both **correct and compilable**. (`compile=True` alone does
+  Inductor fusion without CUDA graphs — a bit less, but with no capture requirement.)
 
 Environment: torch 2.11.0+cu128, NVIDIA L40, driver 570.158 (CUDA 12.8).
 
@@ -155,10 +156,11 @@ pays off.
 Kernel-only median time (the `vmap(hessian)`-equivalent block compute), L40. Baseline =
 eager forward-over-reverse (the library today). `compiled_rev[*]` = compiled reverse-over-reverse.
 Speedup in **bold** is vs the eager baseline (higher is better; <1× = slower). "capture fails" =
-`reduce-overhead` cannot build a CUDA graph because the summand forces a host sync. The two
+`cuda_graphs` cannot build a CUDA graph because the summand forces a host sync. Columns map to
+the API: `compile=True` (Inductor fusion) and `cuda_graphs=True` (fusion + CUDA graphs). The two
 `neohookean*` rows differ *only* in how the determinant is computed.
 
-| device | workload | dtype | N | eager fwd (lib) | eager rev | compiled `default` | compiled `reduce-overhead` (CUDA graphs) |
+| device | workload | dtype | N | eager fwd (lib) | eager rev | `compile=True` (fusion) | `cuda_graphs=True` (CUDA graphs) |
 |---|---|---|--:|--:|--:|--:|--:|
 | cuda | spring | f32 | 10,000 | 2.81ms | 1.44 (**2.0×**) | 0.09 (**30×**) | 0.08 (**34×**) |
 | cuda | spring | f64 | 100,000 | 2.77ms | 1.42 (**1.9×**) | 0.09 (**29×**) | 0.08 (**33×**) |
@@ -178,16 +180,16 @@ _(Abridged; full grid — all N/dtype/device, both neohookean variants — in `b
 **Reading of the sweep:**
 
 - **spring / area, CUDA:** eager is a launch-overhead floor (flat ~2.8 / ~4.9 ms across N);
-  `reduce-overhead` collapses it to ~0.08–0.10 ms → **~34× / ~50×**. `default` inductor (no CUDA
+  `cuda_graphs` collapses it to ~0.08–0.10 ms → **~34× / ~50×**. `compile=True` (fusion, no CUDA
   graphs) also fuses well (~30×). For area, f64 at N=100k falls to **~4×** — as real arithmetic
   grows, the overhead-floor win shrinks (the overhead- → compute-bound crossover).
 - **neohookean with the `det` helper, CUDA — the headline:** now overhead-bound (eager flat
-  ~8.5 ms), so `reduce-overhead` gives **~86–89× (f32)** at N≤10k, tapering to **~18×** at
+  ~8.5 ms), so `cuda_graphs` gives **~86–89× (f32)** at N≤10k, tapering to **~18×** at
   N=100k f32 and **~13×** at N=100k f64 as real FLOPs finally dominate. Correct in every cell
   (`ok`; the N=100k `ok=False` flags are the fwd-vs-reverse rounding gap on the odd degenerate
   random tet, not a compile error — see `tests/test_det.py` for the controlled check).
-- **neohookean_torchdet, CUDA — the contrast:** `reduce-overhead` **cannot capture** (`det`'s
-  host sync), `default` is **0.6× (slower)**, and note eager is itself ~10× slower (83 ms vs
+- **neohookean_torchdet, CUDA — the contrast:** `cuda_graphs` **cannot capture** (`det`'s
+  host sync), `compile=True` is **0.6× (slower)**, and note eager is itself ~10× slower (83 ms vs
   8.5 ms at N=100k) because LAPACK `det` is costly on tiny blocks. This row is what the `det`
   helper replaces.
 - **CPU:** eager functorch pays per-element Python dispatch; inductor fuses it into a vectorized
@@ -213,14 +215,14 @@ _(Abridged; full grid — all N/dtype/device, both neohookean variants — in `b
    Hessian while leaving the fast, well-tested forward-over-reverse `sparse_hessian` path
    unchanged — a surgical fix, versus globally swapping the core AD strategy to reverse-mode
    (also correct, but a far larger blast radius). Regression-tested in `tests/test_det.py`.
-2. **Speed (opt-in, wired in):** `IndexedSum(..., compile=True)` (or
-   `compile="reduce-overhead"`) enables the compiled reverse-over-reverse path. It pays off for
-   **cheap, CUDA-graph-capturable summands on GPU inside a repeated-call loop** (fixed shapes),
-   where `"reduce-overhead"` (CUDA graphs) gives ~an order of magnitude — spring/area **and
-   neohookean, once it uses the elementary `det` helper** (~20–88× on the L40). It needs a
-   summand free of host syncs — which is exactly why `torch.linalg.det` must be replaced by the
-   helper (it both corrupts the eager Hessian *and* blocks CUDA-graph capture). `compile=False`
-   remains the default.
+2. **Speed (opt-in, wired in):** `IndexedSum(..., compile=True)` (Inductor fusion) and
+   `IndexedSum(..., cuda_graphs=True)` (fusion + CUDA graphs; the stronger, layered switch)
+   enable the compiled reverse-over-reverse path. They pay off for **cheap summands on GPU
+   inside a repeated-call loop** (fixed shapes), where `cuda_graphs` gives ~an order of
+   magnitude — spring/area **and neohookean, once it uses the elementary `det` helper** (~20–88×
+   on the L40). `cuda_graphs` needs a summand free of host syncs — which is exactly why
+   `torch.linalg.det` must be replaced by the helper (it both corrupts the eager Hessian *and*
+   blocks CUDA-graph capture). Both default to `False`.
 
 ## Reproduce
 

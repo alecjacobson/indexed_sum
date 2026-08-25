@@ -220,19 +220,28 @@ def _det_energy(v):  # det via the vmap-safe helper, so both eager and compiled 
     return (F * F).sum() - 3 - 2 * torch.log(torch.clamp(J, min=1e-3)) + (J - 1) ** 2
 
 
-_COMPILE_MODES = [True] + (["reduce-overhead"] if torch.cuda.is_available() else [])
+# (compile, cuda_graphs) combinations to exercise. cuda_graphs requires a GPU.
+_COMPILE_OPTS = [dict(compile=True)]
+if torch.cuda.is_available():
+    _COMPILE_OPTS.append(dict(cuda_graphs=True))  # cuda_graphs implies compilation
+
+
+def _opt_id(opt):
+    return "cuda_graphs" if opt.get("cuda_graphs") else "compile"
 
 
 @pytest.mark.parametrize("device", DEVICES)
-@pytest.mark.parametrize("compile_opt", _COMPILE_MODES)
+@pytest.mark.parametrize("opt", _COMPILE_OPTS, ids=_opt_id)
 @pytest.mark.parametrize("name,fn,local_size,dim", SMOOTH_WORKLOADS)
-def test_indexed_sum_compile_option_matches_eager(name, fn, local_size, dim, compile_opt, device):
-    """IndexedSum(compile=True | "reduce-overhead").sparse_hessian == the eager default."""
+def test_indexed_sum_compile_option_matches_eager(name, fn, local_size, dim, opt, device):
+    """IndexedSum(compile=True) and (cuda_graphs=True).sparse_hessian == the eager default."""
+    if opt.get("cuda_graphs") and device != "cuda":
+        pytest.skip("cuda_graphs requires CUDA")
     V, idx = _cloud_inputs(local_size, dim, device, torch.float64)
     Vg = V.clone().requires_grad_(True)
 
-    H_eager = IndexedSum(fn, idx, compile=False).sparse_hessian(Vg).coalesce()
-    obj = IndexedSum(fn, idx, compile=compile_opt)
+    H_eager = IndexedSum(fn, idx).sparse_hessian(Vg).coalesce()
+    obj = IndexedSum(fn, idx, **opt)
     H1 = obj.sparse_hessian(Vg).coalesce()
     H2 = obj.sparse_hessian(Vg).coalesce()  # reuse compiled kernel; clone must keep H1 valid
 
@@ -242,18 +251,18 @@ def test_indexed_sum_compile_option_matches_eager(name, fn, local_size, dim, com
     assert _reldiff(H1.to_dense(), H2.to_dense()) < 1e-9
 
 
-@pytest.mark.parametrize("compile_opt", _COMPILE_MODES)
-def test_indexed_sum_compile_correct_for_det_energy(compile_opt):
+@pytest.mark.parametrize("opt", _COMPILE_OPTS, ids=_opt_id)
+def test_indexed_sum_compile_correct_for_det_energy(opt):
     """End-to-end: a det-helper energy assembles a correct sparse Hessian with compile enabled,
     verified against finite differences on the total energy."""
-    device = "cuda" if (compile_opt == "reduce-overhead") else "cpu"
+    device = "cuda" if opt.get("cuda_graphs") else "cpu"
     g = torch.Generator().manual_seed(0)
     Nv = 16
     V = torch.randn(Nv, 3, generator=g, dtype=torch.float64).to(device)
     idx = torch.stack([torch.randperm(Nv, generator=g)[:4] for _ in range(12)]).to(device)
     Vg = V.clone().requires_grad_(True)
 
-    H = IndexedSum(_det_energy, idx, compile=compile_opt).sparse_hessian(Vg).coalesce().to_dense()
+    H = IndexedSum(_det_energy, idx, **opt).sparse_hessian(Vg).coalesce().to_dense()
 
     def total(z):
         z = z.view(Nv, 3)
