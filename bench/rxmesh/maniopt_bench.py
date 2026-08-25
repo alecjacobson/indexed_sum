@@ -169,9 +169,7 @@ def time_all(mesh, embed, dtype, device, iters):
         term = build_term(F, K, det_helper, compile=cf[0], cuda_graphs=cf[1], cache_indices=cf[2])
 
         def diff_call():
-            if uv.grad is not None:
-                uv.grad = None
-            term(uv).backward()
+            g = term.dense_gradient(uv)  # honors compile/cuda_graphs/cache_indices like the Hessian
             return term.sparse_hessian(uv)
         warm = warmup_cost_s(diff_call, device)
         ms = time_ms(diff_call, device, iters=iters, repeats=7, warmup=3)

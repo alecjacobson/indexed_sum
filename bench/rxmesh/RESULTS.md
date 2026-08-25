@@ -14,16 +14,19 @@ change it.
   exactly** (13.6 ms vs the paper's 13.53 ms at 1M vertices) — the RXMesh side is faithful.
 - With **current PyTorch (2.11)**, *eager* IndexedSum is already faster than the paper measured
   (50.9 ms vs 83.9 ms at 1M), so the gap at 1M is **3.7×, not 6.2×**, before any new feature.
-- Turning on **`cuda_graphs` narrows the 1M gap to ≈2.35×** (and `compile` to ≈2.24×). RXMesh
-  still wins at every size, but by less than the paper reports.
-- The compile win is **large at small/medium meshes (≈5×) and shrinks at 1M (≈1.7×)** because at
-  scale the *eager gradient pass and the sparse-COO assembly* — neither of which the switches
-  touch — dominate, not the block-Hessian kernel.
-- **A fairness fix (`cache_indices`, added here):** most of that eager "assembly" cost was
-  `sparse_hessian` *rebuilding fixed row/col index tensors on every call* — a pattern RXMesh
-  computes once. Caching them (opt-in, non-default) drops the 1M `compile` time from 30.5→21.8 ms,
-  bringing the **1M gap to ≈1.60×** (§3a). So on equal hardware, current PyTorch, `compile`, and
-  the cached pattern, the paper's **6.2× becomes ≈1.6×**.
+- Three post-publication library features **stack** to close the 1M gap, each measured:
+  `compile` (block-Hessian fusion) → **2.24×**, then `cache_indices` (reuse the fixed sparse
+  pattern, as RXMesh does) → **1.60×**, then `dense_gradient` (a compilable/capturable gradient,
+  so the gradient stops being an eager floor) → **1.38×**. Net: the paper's **6.2× becomes
+  ≈1.38×** on equal hardware.
+- The wins are **larger at small/medium meshes** (mass-spring compile+cache is **~9×** vs eager
+  at ≤10k vertices) and taper at 1M as real compute/assembly dominates. At the very smallest
+  sizes RXMesh's near-zero-overhead design still wins by 6–13× — those are sub-millisecond
+  problems where IndexedSum's fixed per-call overhead dominates.
+- The two library additions here (`cache_indices`, `dense_gradient`) are opt-in and default-off;
+  `dense_gradient` also lifts the other apps — notably **manifold-opt** (whose gradient was its
+  dominant cost: best 3.95→**0.74 ms**) and **smoothing** (a gradient-only workload the switches
+  now *do* help: 2.86→**0.95 ms** at 1M).
 - A **correction to the paper's methods text**: it says IndexedSum "performs … reverse-mode
   AD." That is not the configuration the paper benchmarked — the **eager default** (`IS eager`,
   what RXMesh compared against) is **forward-over-reverse** (`torch.func.hessian = jacfwd∘jacrev`),
@@ -108,30 +111,43 @@ for this headless machine are listed in §7.)
 Per grad+Hessian evaluation, f32, one L40. "×faster" = IndexedSum time ÷ RXMesh time (how much
 faster RXMesh is).
 
-| grid n | vertices | RXMesh | IS eager | IS compile | IS cuda_graphs | IS compile+cache | RXMesh× vs eager | RXMesh× vs best IS |
-|-------:|---------:|-------:|---------:|-----------:|---------------:|-----------------:|-----------------:|-------------------:|
-| 10     | 100       | 0.121 ms | 12.65 ms | 2.52 ms | 2.59 ms | 2.13 ms | 104×  | 18× |
-| 100    | 10,000    | 0.263 ms | 13.34 ms | 2.52 ms | 2.55 ms | 2.15 ms | 51×   | 8.2× |
-| 500    | 250,000   | 3.50 ms  | 12.32 ms | 7.31 ms | 7.63 ms | 5.16 ms | 3.5×  | 1.47× |
-| 1000   | 1,000,000 | 13.61 ms | 50.93 ms | 30.48 ms | 31.94 ms | 21.76 ms | **3.7×** | **1.60×** |
+All IndexedSum configurations below use the compilable `dense_gradient` for the gradient (so
+the gradient is accelerated alongside the Hessian in the compiled variants). "×faster" =
+IndexedSum time ÷ RXMesh time (how much faster RXMesh is).
 
-("best IS" = the fastest IndexedSum configuration, `compile+cache`; see §3a for the cache fix.)
+| grid n | vertices | RXMesh | IS eager | IS compile | IS compile+cache | RXMesh× vs eager | RXMesh× vs best IS |
+|-------:|---------:|-------:|---------:|-----------:|-----------------:|-----------------:|-------------------:|
+| 10     | 100       | 0.121 ms | 14.32 ms | 2.05 ms | 1.54 ms | 118× | 13× |
+| 100    | 10,000    | 0.263 ms | 13.79 ms | 2.06 ms | 1.56 ms | 52×  | 5.9× |
+| 500    | 250,000   | 3.50 ms  | 13.74 ms | 6.70 ms | 4.61 ms | 3.9× | 1.32× |
+| 1000   | 1,000,000 | 13.61 ms | 49.60 ms | 27.97 ms | 18.78 ms | **3.6×** | **1.38×** |
+
+("best IS" = fastest IndexedSum config, `compile+cache`.)
+
+**How the 1M gap closed — each post-publication feature, measured.** Rows add one library
+feature at a time (rows 2–4 use autograd `backward` for the gradient, the paper-era path; the
+last switches to the compiled `dense_gradient`):
+
+| at 1M vertices | ms | RXMesh× |
+|-|-----:|--:|
+| paper (RTX 4090; none of the below existed) | — | 6.2× |
+| eager default, this L40 (PyTorch 2.11) | 50.9 | 3.7× |
+| + `compile` (block-Hessian fusion) | 30.5 | 2.24× |
+| + `cache_indices` (reuse fixed sparse pattern) | 21.8 | 1.60× |
+| + `dense_gradient` (compiled gradient) | 18.8 | **1.38×** |
 
 **Reading it.**
 - At the paper's headline size (**1M vertices**): the paper reported **6.2×**. On equal hardware
-  with current PyTorch, *eager* IndexedSum already closes it to **3.7×**, `cuda_graphs` to
-  **2.35×** (`compile` to 2.24×), and **`compile` + `cache_indices` to ≈1.60×** (§3a). RXMesh is
-  still faster, but by roughly a quarter of the originally reported factor.
-- At **small/medium meshes** the gap is huge (20–100×) and the new switches help a lot in
-  *relative* terms (IndexedSum's eager ~13 ms is almost pure Python/launch overhead; compile
-  collapses it to ~2.5 ms). But these are sub-millisecond RXMesh problems where IndexedSum's
-  fixed per-call overhead dominates — RXMesh's near-zero-overhead design wins decisively.
-- The compile **speedup shrinks with size** (5.0× → 5.3× → 1.7× → 1.7×). Decomposition explains
-  why: of IndexedSum's ~13 ms eager Diff at small n, the Hessian block-compute is the launch-
-  bound part the switches remove; but the **eager gradient pass (~1.3 ms floor) and the
-  sparse-COO assembly (~6 ms at 250k, growing with nnz)** are *not* compiled. At 1M the eager
-  Hessian is genuinely compute-bound (47 ms) and assembly-bound, so removing launch overhead
-  buys less.
+  the eager default is already **3.7×** (newer PyTorch), and the three opt-in features bring it to
+  **1.38×** — RXMesh still wins, but by ~a fifth of the originally reported factor.
+- At **small/medium meshes** the *relative* wins are largest (compile+cache is ~9× over eager at
+  ≤10k vertices), yet RXMesh is still 6–13× faster there — these are sub-millisecond problems
+  where IndexedSum's fixed per-call overhead dominates and RXMesh's near-zero-overhead design
+  wins decisively. The closest IndexedSum gets is at 250k–1M (1.3–1.4×).
+- The per-feature win **shrinks with size**: at ≤10k vertices the Diff is nearly pure
+  launch/dispatch overhead that fusion + graphs remove (→ ~9×), while at 1M real compute and the
+  sparse-COO assembly dominate. §3a decomposes the assembly (and the `cache_indices` fix);
+  §3b covers the gradient (`dense_gradient`), which was the remaining eager floor.
 
 **Why our eager IndexedSum beats the paper's (50.9 vs 83.9 ms).** Same code path, newer
 PyTorch (2.11 vs whatever the paper used) and the L40. We did not change the library's eager
@@ -171,13 +187,30 @@ It is numerically identical to the default (verified, 0.0 rel-err) and composes 
 | 500    | 250,000   | 3.50 ms  | 7.31 ms  | 5.16 ms  | 1.47× |
 | 1000   | 1,000,000 | 13.61 ms | 30.48 ms | 21.76 ms | **1.60×** |
 
-So the 1M gap collapses across the sequence **6.2× (paper) → 3.7× (eager, same HW) → 2.24×
-(+compile) → 1.60× (+compile+cache)**. The residual ~1.6× is now dominated by the parts still
-not addressed: the **eager gradient pass** (~3.8 ms, uncompiled) and the **multi-term
-`SumNode` sparse-adds** (IndexedSum assembles spring/inertial/gravity as three separate matrices
-and adds them, where RXMesh accumulates all terms into one shared CSR pattern). Closing those —
-a compiled gradient and a single shared assembly pattern — is the natural next step and would
-narrow the gap further; `cache_indices` is the first, cleanest piece.
+With `cache_indices` the 1M gap goes **2.24× (compile) → 1.60× (compile+cache)**. The next
+remaining piece was the gradient (§3b).
+
+### 3b. The gradient floor, and a second fix (`dense_gradient`)
+
+After the Hessian was compiled and the pattern cached, the **eager gradient became the floor**:
+IndexedSum got its gradient via `energy(V).backward()` (eager autograd), ~3.8 ms at 1M — larger
+than the compiled+cached Hessian assembly it sat next to. RXMesh instead scatters per-element
+gradients on-device with the rest of `eval_terms`.
+
+The core library now has an opt-in **`IndexedSum.dense_gradient(V)`** (a compilable/capturable
+per-element gradient assembly, mirroring `sparse_hessian`; honors the same
+`compile`/`cuda_graphs`/`cache_indices` flags). It is numerically identical to autograd
+(verified to ~1e-16). Switching the benchmark's gradient to it drops the 1M mass-spring
+`compile+cache` Diff from **21.8 → 18.8 ms** (gap **1.60× → 1.38×**), and — because `jacrev` is
+reverse-mode — it compiles cleanly with no reformulation. Per-element gradient alone at 1M:
+**eager 3.2 ms → compiled+cached 0.95 ms** (~3.4×).
+
+So the 1M gap collapses across the full sequence **6.2× (paper) → 3.7× (eager, same HW) → 2.24×
+(+compile) → 1.60× (+cache_indices) → 1.38× (+dense_gradient)**. The residual ~1.4× is now the
+**multi-term `SumNode` sparse-adds** (IndexedSum assembles spring/inertial/gravity as three
+separate matrices and adds them, where RXMesh accumulates all terms into one shared CSR pattern)
+plus IndexedSum computing the gradient and Hessian in two passes where RXMesh fuses them — a
+single shared assembly pattern and a fused grad+Hessian would be the next steps.
 
 ---
 
@@ -188,25 +221,21 @@ IndexedSum number to move. We still port each energy to IndexedSum on the same L
 apples-to-apples extension — with honest framing of where the comparison is or isn't clean.
 
 ### 4a. Laplacian smoothing — gradient only (paper Fig 6)
-RXMesh's Smoothing app is **gradient descent**: its Diff is a *gradient*, no Hessian.
-**IndexedSum's `compile`/`cuda_graphs` only wire into `sparse_hessian`, so they do not apply
-to a gradient-only workload.** We therefore report IndexedSum's eager autograd gradient.
+RXMesh's Smoothing app is **gradient descent**: its Diff is a *gradient*, no Hessian. With the
+new **`dense_gradient`** path (§3b) IndexedSum now *does* have a compilable/capturable gradient,
+so unlike the Hessian-only `compile`/`cuda_graphs` this workload benefits:
 
-| grid n | vertices | RXMesh grad/iter | IS eager grad/iter | RXMesh× |
-|-------:|---------:|-----------------:|-------------------:|--------:|
-| 100    | 10,000    | 0.020 ms | 0.41 ms | 20× |
-| 500    | 250,000   | 0.108 ms | 0.47 ms | 4.4× |
-| 1000   | 1,000,000 | 0.420 ms | 2.84 ms | 6.7× |
+| grid n | vertices | RXMesh grad/iter | IS eager autograd | IS `dense_gradient` compiled+cached | RXMesh× |
+|-------:|---------:|-----------------:|------------------:|-----------------------------------:|--------:|
+| 100    | 10,000    | 0.020 ms | 0.41 ms | 0.20 ms | 10× |
+| 500    | 250,000   | 0.108 ms | 0.47 ms | 0.21 ms | 2.0× |
+| 1000   | 1,000,000 | 0.420 ms | 2.86 ms | **0.95 ms** | **2.3×** |
 
-Honest note: IndexedSum is a **sparse-Hessian** tool; for pure gradient descent it offers no
-Hessian to accelerate and pays per-call autograd overhead, so RXMesh is several× faster and the
-`compile`/`cuda_graphs`/`cache_indices` switches (all sparse-Hessian-only) change nothing. A
-*compiled-gradient* path would help — a partial what-if is in `smoothing_bench.py`, and the
-same eager-gradient floor limits the Hessian cases too (§3a), so it is a live next step.
-
-(`cache_indices` likewise does not apply here — there is no assembled sparse matrix to cache a
-pattern for. It does apply to the two Hessian-assembling apps below, which are updated to
-include it.)
+The compiled gradient cuts the 1M gap from **6.7× to 2.3×**. Honest note: IndexedSum is still a
+**sparse-Hessian** tool at heart — for pure gradient descent it pays a full per-element
+`vmap(jacrev)` + scatter, so at the smallest meshes RXMesh's near-zero overhead still wins ~10×,
+and `dense_gradient` eager is actually a touch slower than plain `backward` there (it only pays
+off once compiled). `cache_indices` applies via the gradient's own scatter map.
 
 ### 4b. Parameterization — symmetric Dirichlet (paper Table 2)
 RXMesh's Param uses a **matrix-free CG Newton** solver (`eval_terms_grad_only` + Hessian-vector
@@ -216,14 +245,14 @@ apples-to-oranges. What we can show cleanly is the IndexedSum derivative-provisi
 same energy, and that the new switches apply to it (this energy has a `J⁻¹` / determinant
 term):
 
-| grid n | vertices | IS eager | IS compile | IS compile+cache | best speedup |
-|-------:|---------:|---------:|-----------:|-----------------:|-------------:|
-| 100    | 10,000    | 10.09 ms | 2.19 ms | 1.96 ms | 5.6× |
-| 500    | 250,000   | 15.02 ms | 7.43 ms | 5.16 ms | 2.9× |
-| 1000   | 1,000,000 | 81.29 ms | 33.89 ms | **28.94 ms** | **2.8×** |
+| grid n | vertices | IS eager | IS compile | IS compile+cache | IS cuda_graphs+cache | best speedup |
+|-------:|---------:|---------:|-----------:|-----------------:|---------------------:|-------------:|
+| 100    | 10,000    | 10.11 ms | 1.04 ms | 0.88 ms | **0.64 ms** | 15.7× |
+| 500    | 250,000   | 14.82 ms | 6.74 ms | 5.48 ms | 5.61 ms | 2.7× |
+| 1000   | 1,000,000 | 80.23 ms | 30.54 ms | **25.18 ms** | 26.36 ms | 3.2× |
 
-(`cache_indices` stacks with `compile` here too — e.g. 1M: 33.9 → 28.9 ms; `cuda_graphs+cache`
-is comparable. "best speedup" is the fastest configuration vs eager.)
+(All configs use `dense_gradient`; `cache_indices` and the compiled gradient both stack with
+`compile`/`cuda_graphs`. "best speedup" is the fastest configuration vs eager.)
 
 The symmetric-Dirichlet Hessian is verified against finite differences (below), computed with
 the elementary 2×2 determinant/inverse (the `indexed_sum.det` remedy) — required for
@@ -238,12 +267,14 @@ family as the documented det bug. On the paper's giraffe mesh (3,130 V / 6,256 F
 
 | | RXMesh Diff/iter | IS eager | IS compile | IS cuda_graphs | IS cuda_graphs+cache |
 |-|-----------------:|---------:|-----------:|---------------:|---------------------:|
-| giraffe | 0.20 ms | 31.9 ms | 4.84 ms (6.6×) | 4.47 ms (7.1×) | **3.95 ms (8.1×)** |
+| giraffe | 0.20 ms | 33.3 ms | 1.45 ms (23×) | 0.94 ms (35×) | **0.74 ms (45×)** |
 
-giraffe is small, so IndexedSum is deep in the overhead-bound regime where the switches help
-most — `cuda_graphs+cache` reaches **8.1×** — yet RXMesh is still ~20–160× faster at this size,
-consistent with the mass-spring small-n rows. (A larger genus-0 mesh with a sphere embedding would narrow this as
-at mass-spring's 1M row; we only had giraffe's embedding to match RXMesh exactly.)
+This app benefits most from `dense_gradient`: its retraction+barrier energy has an expensive
+per-element gradient, so with autograd `backward` the gradient *was* ~90% of the compiled Diff
+(best was 3.95 ms). Compiling the gradient too collapses it — best **0.74 ms (45× over eager)**,
+now within **3.7×** of RXMesh (0.20 ms) on this small mesh. (A larger genus-0 mesh with a sphere
+embedding would narrow it further, as at mass-spring's 1M row; we only had giraffe's embedding to
+match RXMesh exactly.)
 
 ---
 
@@ -256,6 +287,10 @@ Every configuration timed above passes an AD-independent check. Representative (
 | mass-spring | 6.1e-08 | 1.7e-16 | 1.7e-16 |
 | param (sym-Dirichlet) | 5.0e-06 | 6.6e-16 | 6.6e-16 |
 | mani-opt (spherical) | 6.6e-04 (grad vs FD 2.1e-06) | 6.7e-13 | 6.7e-13 |
+
+The `dense_gradient` used for timing is checked against autograd in every gate (≤1e-16 f64;
+mass-spring/smoothing print it explicitly) and carries its own unit tests in the core library
+(`tests/test_gradient_compile.py`).
 
 Two honest sub-findings on the determinant bug:
 - The documented `torch.linalg.det`-under-vmap Hessian bug is **narrow**: in the *full* param
@@ -274,11 +309,12 @@ Two honest sub-findings on the determinant bug:
   cross-check, which matched.
 - **Newer PyTorch** is the main reason eager IndexedSum improved on its own (3.7× vs the paper's
   6.2×). This is not attributable to the new switches; we separate the two effects.
-- **What the switches don't touch:** the gradient pass and the sparse-COO *assembly* are eager
-  and graph-break — they dilute the block-Hessian speedup, increasingly so at scale. The biggest
-  avoidable piece (rebuilding fixed indices) is addressed by `cache_indices` (§3a), taking the
-  1M gap to ≈1.6×; the remaining pieces (a compiled gradient, a single shared assembly pattern
-  across terms) would push it further and are the natural next steps.
+- **What's addressed vs. what remains:** the two largest avoidable costs are now fixed —
+  rebuilding fixed indices (`cache_indices`, §3a) and the eager gradient (`dense_gradient`, §3b)
+  — taking the 1M gap to ≈1.38×. What remains: IndexedSum still assembles multi-term energies as
+  separate matrices it sparse-adds (vs RXMesh's one shared CSR pattern) and computes grad/Hessian
+  in two passes (vs RXMesh's fused `eval_terms`). A shared assembly pattern and a fused
+  grad+Hessian are the natural next steps.
 - **Warmup / fixed shapes.** `compile`/`cuda_graphs` pay a one-time compile cost (~2–14 s,
   reported per row) and require fixed shapes — realistic for a Newton/timestep loop that calls
   `sparse_hessian` repeatedly at one shape, which is the regime here. Warmup is excluded from

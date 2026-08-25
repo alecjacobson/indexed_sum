@@ -1,0 +1,6 @@
+  grad autograd vs FD       relerr = 3.44e-10
+  dense_gradient vs autograd relerr = 1.15e-16  => PASS
+     n        nV        nE   autograd  dense_eager  dense_compile  dense_cg+cache
+   100     10000     29601      0.409        0.752          0.212           0.204
+   500    250000    748001      0.470        0.784          0.213           0.212
+  1000   1000000   2996001      2.859        1.804          1.023           0.951

@@ -155,9 +155,7 @@ def time_variant(n, dtype, device, compile, cuda_graphs, iters, cache_indices=Fa
                        cache_indices=cache_indices)
 
     def diff_call():
-        if uv.grad is not None:
-            uv.grad = None
-        term(uv).backward()
+        g = term.dense_gradient(uv)  # honors compile/cuda_graphs/cache_indices like the Hessian
         return term.sparse_hessian(uv)
     warm = warmup_cost_s(diff_call, device)
     ms = time_ms(diff_call, device, iters=iters, repeats=7, warmup=3)

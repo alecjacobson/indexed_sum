@@ -117,6 +117,9 @@ def correctness(device):
     (g_ad,) = torch.autograd.grad(e, Vg)
     g_fd = fd_gradient(energy_only, Vc).reshape_as(g_ad)
     grad_err = (g_ad - g_fd).abs().max().item() / (g_fd.abs().max().item() + 1e-30)
+    # dense_gradient (the assembly used for timing) vs autograd
+    g_dense = terms.dense_gradient(Vc).reshape_as(g_ad)
+    dgrad_err = (g_dense - g_ad).abs().max().item() / (g_ad.abs().max().item() + 1e-30)
 
     # eager sparse Hessian vs finite differences
     H_eager = dense_from_sparse(terms.sparse_hessian(Vc))
@@ -132,10 +135,12 @@ def correctness(device):
     cg_err = reldiff(H_eager, H_cg)
 
     print(f"  grad autograd vs FD           relerr = {grad_err:.2e}")
+    print(f"  dense_gradient vs autograd     relerr = {dgrad_err:.2e}")
     print(f"  eager Hessian vs FD           relerr = {hess_fd_err:.2e}")
     print(f"  compile vs eager Hessian      relerr = {comp_err:.2e}")
     print(f"  cuda_graphs vs eager Hessian  relerr = {cg_err:.2e}")
-    ok = grad_err < 1e-6 and hess_fd_err < 1e-4 and comp_err < 1e-9 and cg_err < 1e-9
+    ok = (grad_err < 1e-6 and dgrad_err < 1e-9 and hess_fd_err < 1e-4
+          and comp_err < 1e-9 and cg_err < 1e-9)
     print(f"  => {'PASS' if ok else 'FAIL'}")
     return ok
 
@@ -144,12 +149,13 @@ def correctness(device):
 # Timing
 # --------------------------------------------------------------------------------------
 def make_diff_call(terms, V):
-    """One 'Diff' evaluation: gradient (backward) + full sparse Hessian assembly."""
+    """One 'Diff' evaluation: gradient + full sparse Hessian assembly.
+
+    Uses `dense_gradient` (which honors the same compile/cuda_graphs/cache_indices flags as
+    `sparse_hessian`) rather than autograd `backward`, so the gradient is accelerated in the
+    compiled variants too -- closing the eager-gradient floor documented in RESULTS.md §3a."""
     def call():
-        if V.grad is not None:
-            V.grad = None
-        e = terms(V)
-        e.backward()
+        g = terms.dense_gradient(V)
         H = terms.sparse_hessian(V)
         return H
     return call
@@ -169,9 +175,7 @@ def time_variant(n, dtype, device, compile, cuda_graphs, iters, cache_indices=Fa
     def hess_only():
         return terms.sparse_hessian(V)
     def grad_only():
-        if V.grad is not None:
-            V.grad = None
-        terms(V).backward()
+        return terms.dense_gradient(V)
     hess_ms = time_ms(hess_only, device, iters=iters, repeats=5, warmup=2)
     grad_ms = time_ms(grad_only, device, iters=iters, repeats=5, warmup=2)
     return dict(ms=ms, hess_ms=hess_ms, grad_ms=grad_ms, warmup_s=warm,

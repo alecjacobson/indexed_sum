@@ -20,7 +20,6 @@ import sys
 
 import torch
 import torch._dynamo
-from torch.func import vmap, grad as fgrad
 
 for _attr in ("recompile_limit", "cache_size_limit"):
     if hasattr(torch._dynamo.config, _attr):
@@ -48,43 +47,41 @@ def correctness(device):
     (g_ad,) = torch.autograd.grad(term(Vg), Vg)
     g_fd = fd_gradient(lambda X: term(X), Vc).reshape_as(g_ad)
     err = (g_ad - g_fd).abs().max().item() / (g_fd.abs().max().item() + 1e-30)
-    print(f"  grad autograd vs FD  relerr = {err:.2e}  => {'PASS' if err < 1e-6 else 'FAIL'}")
-    return err < 1e-6
+    g_dense = term.dense_gradient(Vc).reshape_as(g_ad)
+    derr = (g_dense - g_ad).abs().max().item() / (g_ad.abs().max().item() + 1e-30)
+    print(f"  grad autograd vs FD       relerr = {err:.2e}")
+    print(f"  dense_gradient vs autograd relerr = {derr:.2e}  "
+          f"=> {'PASS' if err < 1e-6 and derr < 1e-9 else 'FAIL'}")
+    return err < 1e-6 and derr < 1e-9
 
 
-def time_indexedsum_grad(n, dtype, device, iters):
+def time_autograd_backward(n, dtype, device, iters):
+    """The paper-era gradient path: energy forward + autograd backward (no dense_gradient)."""
     V, F, E = plane_grid(n, dtype=dtype, device=device)
     V = V.detach().requires_grad_(True)
     term = IndexedSum(edge_energy, E)
 
-    def grad_call():
+    def call():
         if V.grad is not None:
             V.grad = None
         term(V).backward()
-    ms = time_ms(grad_call, device, iters=iters, repeats=7, warmup=3)
-    return ms, V.shape[0], E.shape[0]
+    return time_ms(call, device, iters=iters, repeats=7, warmup=3), V.shape[0], E.shape[0]
 
 
-def time_compiled_whatif(n, dtype, device, iters):
-    """Ceiling only: torch.compile a vmapped per-edge forward+grad reduction. This is NOT
-    the IndexedSum gradient path (the library does not compile gradients); shown for context."""
-    torch._dynamo.reset()
+def time_dense_gradient(n, dtype, device, iters, compile=False, cuda_graphs=False, cache_indices=False):
+    """The compiled/capturable gradient path (IndexedSum.dense_gradient, merged in the core
+    library). For a gradient-only workload this IS accelerated by compile/cuda_graphs/cache."""
+    if compile or cuda_graphs:
+        torch._dynamo.reset()
     V, F, E = plane_grid(n, dtype=dtype, device=device)
-    sel = V[E]  # (M,2,3)
+    V = V.detach()
+    term = IndexedSum(edge_energy, E, compile=compile, cuda_graphs=cuda_graphs,
+                      cache_indices=cache_indices)
 
-    def per_edge(v):
-        return edge_energy(v)
-
-    def grads(s):
-        return vmap(fgrad(per_edge))(s)  # (M,2,3) per-edge grads (scatter omitted)
-
-    ck = torch.compile(grads, mode="reduce-overhead", dynamic=False)
-    try:
-        warmup_cost_s(lambda: ck(sel), device)
-        ms = time_ms(lambda: ck(sel), device, iters=iters, repeats=5, warmup=2)
-        return ms
-    except Exception:
-        return float("nan")
+    def call():
+        return term.dense_gradient(V)
+    warmup_cost_s(call, device)
+    return time_ms(call, device, iters=iters, repeats=7, warmup=3)
 
 
 def main():
@@ -101,11 +98,14 @@ def main():
         sys.exit(1)
     torch._dynamo.reset()
     print("\n== gradient time per iteration, ms (edge energy |x0-x1|^2) ==")
-    print(f"{'n':>6} {'nV':>9} {'nE':>9} {'IS_eager_grad':>14} {'(whatif_compiled)':>18}")
+    print(f"{'n':>6} {'nV':>9} {'nE':>9} {'autograd':>10} {'dense_eager':>12} "
+          f"{'dense_compile':>14} {'dense_cg+cache':>15}")
     for n in args.sizes:
-        ms, nV, nE = time_indexedsum_grad(n, dtype, device, args.iters)
-        wms = time_compiled_whatif(n, dtype, device, args.iters)
-        print(f"{n:>6} {nV:>9} {nE:>9} {ms:>14.3f} {wms:>18.3f}")
+        ms_bw, nV, nE = time_autograd_backward(n, dtype, device, args.iters)
+        ms_e = time_dense_gradient(n, dtype, device, args.iters)
+        ms_c = time_dense_gradient(n, dtype, device, args.iters, compile=True)
+        ms_cg = time_dense_gradient(n, dtype, device, args.iters, cuda_graphs=True, cache_indices=True)
+        print(f"{n:>6} {nV:>9} {nE:>9} {ms_bw:>10.3f} {ms_e:>12.3f} {ms_c:>14.3f} {ms_cg:>15.3f}")
 
 
 if __name__ == "__main__":
