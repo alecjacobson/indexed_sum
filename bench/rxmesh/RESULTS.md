@@ -245,14 +245,17 @@ apples-to-oranges. What we can show cleanly is the IndexedSum derivative-provisi
 same energy, and that the new switches apply to it (this energy has a `J⁻¹` / determinant
 term):
 
-| grid n | vertices | IS eager | IS compile | IS compile+cache | IS cuda_graphs+cache | best speedup |
-|-------:|---------:|---------:|-----------:|-----------------:|---------------------:|-------------:|
+Here the speedups are **vs IS eager** (self-relative), not vs RXMesh — RXMesh's matrix-free CG
+solves a different problem (no assembled Hessian), so a like-for-like RXMesh× is not meaningful:
+
+| grid n | vertices | IS eager | IS compile | IS compile+cache | IS cuda_graphs+cache | best× vs IS eager |
+|-------:|---------:|---------:|-----------:|-----------------:|---------------------:|------------------:|
 | 100    | 10,000    | 10.11 ms | 1.04 ms | 0.88 ms | **0.64 ms** | 15.7× |
 | 500    | 250,000   | 14.82 ms | 6.74 ms | 5.48 ms | 5.61 ms | 2.7× |
 | 1000   | 1,000,000 | 80.23 ms | 30.54 ms | **25.18 ms** | 26.36 ms | 3.2× |
 
 (All configs use `dense_gradient`; `cache_indices` and the compiled gradient both stack with
-`compile`/`cuda_graphs`. "best speedup" is the fastest configuration vs eager.)
+`compile`/`cuda_graphs`.)
 
 The symmetric-Dirichlet Hessian is verified against finite differences (below), computed with
 the elementary 2×2 determinant/inverse (the `indexed_sum.det` remedy) — required for
@@ -265,16 +268,19 @@ RXMesh's ManiOpt is a **Newton method with an assembled Hessian** (like mass-spr
 *is* directly analogous. Its energy contains a **3×3 determinant** (a signed volume) — the same
 family as the documented det bug. On the paper's giraffe mesh (3,130 V / 6,256 F):
 
-| | RXMesh Diff/iter | IS eager | IS compile | IS cuda_graphs | IS cuda_graphs+cache |
-|-|-----------------:|---------:|-----------:|---------------:|---------------------:|
-| giraffe | 0.20 ms | 33.3 ms | 1.45 ms (23×) | 0.94 ms (35×) | **0.74 ms (45×)** |
+| | RXMesh Diff/iter | IS eager | IS compile | IS cuda_graphs | IS cuda_graphs+cache | RXMesh× vs best IS |
+|-|-----------------:|---------:|-----------:|---------------:|---------------------:|-------------------:|
+| giraffe | 0.20 ms | 33.3 ms | 1.45 ms | 0.94 ms | **0.74 ms** | **3.7×** |
+
+(As in §3, "RXMesh×" is IS time ÷ RXMesh time — how much faster RXMesh is. The IndexedSum
+configs also speed up **23× / 35× / 45× over IS eager** respectively.)
 
 This app benefits most from `dense_gradient`: its retraction+barrier energy has an expensive
 per-element gradient, so with autograd `backward` the gradient *was* ~90% of the compiled Diff
-(best was 3.95 ms). Compiling the gradient too collapses it — best **0.74 ms (45× over eager)**,
-now within **3.7×** of RXMesh (0.20 ms) on this small mesh. (A larger genus-0 mesh with a sphere
-embedding would narrow it further, as at mass-spring's 1M row; we only had giraffe's embedding to
-match RXMesh exactly.)
+(best was 3.95 ms). Compiling the gradient too collapses it to **0.74 ms**, now within **3.7×**
+of RXMesh (0.20 ms) on this small mesh. (A larger genus-0 mesh with a sphere embedding would
+narrow it further, as at mass-spring's 1M row; we only had giraffe's embedding to match RXMesh
+exactly.)
 
 ---
 
@@ -362,5 +368,3 @@ guard around one Drop-scene `registerSurfaceMesh` call in `apps/MassSpring/draw.
 2-line `cuda_profiler_api.h` shim (absent from the assembled toolkit; symbols live in
 libcudart). CUDA math libs (cusparse/cusolver/cublas) were assembled into a complete 12.6
 toolkit from the system's runtime libs plus matching cu12 headers.
-```
-```
