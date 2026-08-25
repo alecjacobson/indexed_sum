@@ -19,6 +19,11 @@ change it.
 - The compile win is **large at small/medium meshes (≈5×) and shrinks at 1M (≈1.7×)** because at
   scale the *eager gradient pass and the sparse-COO assembly* — neither of which the switches
   touch — dominate, not the block-Hessian kernel.
+- **A fairness fix (`cache_indices`, added here):** most of that eager "assembly" cost was
+  `sparse_hessian` *rebuilding fixed row/col index tensors on every call* — a pattern RXMesh
+  computes once. Caching them (opt-in, non-default) drops the 1M `compile` time from 30.5→21.8 ms,
+  bringing the **1M gap to ≈1.60×** (§3a). So on equal hardware, current PyTorch, `compile`, and
+  the cached pattern, the paper's **6.2× becomes ≈1.6×**.
 - A **correction to the paper's methods text**: it says IndexedSum "performs … reverse-mode
   AD." The default path is **forward-over-reverse** (`torch.func.hessian = jacfwd∘jacrev`),
   which uses *both* modes (details below).
@@ -98,18 +103,20 @@ for this headless machine are listed in §7.)
 Per grad+Hessian evaluation, f32, one L40. "×faster" = IndexedSum time ÷ RXMesh time (how much
 faster RXMesh is).
 
-| grid n | vertices | RXMesh | IS eager | IS compile | IS cuda_graphs | RXMesh× vs eager | RXMesh× vs cuda_graphs |
-|-------:|---------:|-------:|---------:|-----------:|---------------:|-----------------:|-----------------------:|
-| 10     | 100       | 0.121 ms | 12.65 ms | 2.52 ms | 2.59 ms | 104×  | 21× |
-| 100    | 10,000    | 0.263 ms | 13.34 ms | 2.52 ms | 2.55 ms | 51×   | 9.7× |
-| 500    | 250,000   | 3.50 ms  | 12.32 ms | 7.31 ms | 7.63 ms | 3.5×  | 2.2× |
-| 1000   | 1,000,000 | 13.61 ms | 50.93 ms | 30.48 ms | 31.94 ms | **3.7×** | **2.35×** |
+| grid n | vertices | RXMesh | IS eager | IS compile | IS cuda_graphs | IS compile+cache | RXMesh× vs eager | RXMesh× vs best IS |
+|-------:|---------:|-------:|---------:|-----------:|---------------:|-----------------:|-----------------:|-------------------:|
+| 10     | 100       | 0.121 ms | 12.65 ms | 2.52 ms | 2.59 ms | 2.13 ms | 104×  | 18× |
+| 100    | 10,000    | 0.263 ms | 13.34 ms | 2.52 ms | 2.55 ms | 2.15 ms | 51×   | 8.2× |
+| 500    | 250,000   | 3.50 ms  | 12.32 ms | 7.31 ms | 7.63 ms | 5.16 ms | 3.5×  | 1.47× |
+| 1000   | 1,000,000 | 13.61 ms | 50.93 ms | 30.48 ms | 31.94 ms | 21.76 ms | **3.7×** | **1.60×** |
+
+("best IS" = the fastest IndexedSum configuration, `compile+cache`; see §3a for the cache fix.)
 
 **Reading it.**
 - At the paper's headline size (**1M vertices**): the paper reported **6.2×**. On equal hardware
-  with current PyTorch, *eager* IndexedSum already closes it to **3.7×**, and **`cuda_graphs`
-  brings it to 2.35×** (`compile` to 2.24×). RXMesh is still faster, by roughly **half to a
-  third** of the originally reported factor.
+  with current PyTorch, *eager* IndexedSum already closes it to **3.7×**, `cuda_graphs` to
+  **2.35×** (`compile` to 2.24×), and **`compile` + `cache_indices` to ≈1.60×** (§3a). RXMesh is
+  still faster, but by roughly a quarter of the originally reported factor.
 - At **small/medium meshes** the gap is huge (20–100×) and the new switches help a lot in
   *relative* terms (IndexedSum's eager ~13 ms is almost pure Python/launch overhead; compile
   collapses it to ~2.5 ms). But these are sub-millisecond RXMesh problems where IndexedSum's
@@ -129,6 +136,43 @@ switches.
 Reproduce: `bench/rxmesh/run_rxmesh_massspring.sh` (RXMesh side) and
 `python bench/rxmesh/mass_spring_bench.py --sizes 10 100 500 1000` (IndexedSum side). Raw
 numbers in `mass_spring_rxmesh.csv` / `mass_spring_is.csv`.
+
+### 3a. Where the assembly time goes, and a fairness fix (`cache_indices`)
+
+Neither `compile` nor `cuda_graphs` touches `sparse_hessian`'s **assembly**. Decomposing that
+assembly (1M, the dominant spring term) shows it is almost entirely one avoidable thing:
+
+| step | ms |
+|-|--:|
+| rebuild row/col **index** tensors every call | 7.50 |
+| construct the COO once indices exist | 0.008 |
+| block-Hessian compute (compiled) | 4.53 |
+| **full `sparse_hessian`** | **12.02** |
+
+The returned matrix is already a **device-side** `torch.sparse_coo` tensor (not CPU) — but it is
+rebuilt from scratch each call, and its row/col indices are a pure function of the mesh topology
+(`all_indices`), i.e. **fixed across every Newton/timestep iteration**. RXMesh, by contrast,
+computes its CSR sparsity pattern **once** and only scatters new values. Rebuilding that fixed
+index tensor (an `arange` + two `expand`+`reshape` into a 108M-entry int64 tensor) is the 7.5 ms.
+
+This repo now has an **opt-in `IndexedSum(..., cache_indices=True)`** that caches the index
+tensor and reuses it — the same "pattern computed once" strategy RXMesh uses, appropriate to a
+fixed-topology solve loop (trades a persistent `[2, nnz]` int64 tensor for the per-call rebuild).
+It is numerically identical to the default (verified, 0.0 rel-err) and composes with
+`compile`/`cuda_graphs`. Effect on the mass-spring Diff:
+
+| grid n | vertices | RXMesh | IS `compile` | IS `compile+cache` | RXMesh× vs `compile+cache` |
+|-------:|---------:|-------:|-------------:|-------------------:|---------------------------:|
+| 500    | 250,000   | 3.50 ms  | 7.31 ms  | 5.16 ms  | 1.47× |
+| 1000   | 1,000,000 | 13.61 ms | 30.48 ms | 21.76 ms | **1.60×** |
+
+So the 1M gap collapses across the sequence **6.2× (paper) → 3.7× (eager, same HW) → 2.24×
+(+compile) → 1.60× (+compile+cache)**. The residual ~1.6× is now dominated by the parts still
+not addressed: the **eager gradient pass** (~3.8 ms, uncompiled) and the **multi-term
+`SumNode` sparse-adds** (IndexedSum assembles spring/inertial/gravity as three separate matrices
+and adds them, where RXMesh accumulates all terms into one shared CSR pattern). Closing those —
+a compiled gradient and a single shared assembly pattern — is the natural next step and would
+narrow the gap further; `cache_indices` is the first, cleanest piece.
 
 ---
 
@@ -218,9 +262,10 @@ Two honest sub-findings on the determinant bug:
 - **Newer PyTorch** is the main reason eager IndexedSum improved on its own (3.7× vs the paper's
   6.2×). This is not attributable to the new switches; we separate the two effects.
 - **What the switches don't touch:** the gradient pass and the sparse-COO *assembly* are eager
-  and graph-break — they dilute the block-Hessian speedup, increasingly so at scale. This is
-  why the mass-spring win drops to ~1.7× at 1M. An assembly/gradient that were also compiled
-  (a library change, out of scope here) would push the ratio further.
+  and graph-break — they dilute the block-Hessian speedup, increasingly so at scale. The biggest
+  avoidable piece (rebuilding fixed indices) is addressed by `cache_indices` (§3a), taking the
+  1M gap to ≈1.6×; the remaining pieces (a compiled gradient, a single shared assembly pattern
+  across terms) would push it further and are the natural next steps.
 - **Warmup / fixed shapes.** `compile`/`cuda_graphs` pay a one-time compile cost (~2–14 s,
   reported per row) and require fixed shapes — realistic for a Newton/timestep loop that calls
   `sparse_hessian` repeatedly at one shape, which is the regime here. Warmup is excluded from

@@ -57,7 +57,7 @@ G = (0.0, -9.81, 0.0)
 # --------------------------------------------------------------------------------------
 # Energy term builders (return IndexedSum objects with the requested compile flags)
 # --------------------------------------------------------------------------------------
-def build_terms(V, E, dtype, device, compile=False, cuda_graphs=False):
+def build_terms(V, E, dtype, device, compile=False, cuda_graphs=False, cache_indices=False):
     nV = V.shape[0]
     # squared rest lengths (RXMesh stores rest_l = (a-b).squaredNorm())
     d0 = V[E[:, 0]] - V[E[:, 1]]
@@ -70,7 +70,7 @@ def build_terms(V, E, dtype, device, compile=False, cuda_graphs=False):
     c_spring = 0.5 * K * H * H
     half_m = 0.5 * mass
     c_grav = -mass * H * H
-    flags = dict(compile=compile, cuda_graphs=cuda_graphs)
+    flags = dict(compile=compile, cuda_graphs=cuda_graphs, cache_indices=cache_indices)
 
     def spring(v, rr):          # v:(2,3), rr:(1,)
         d = v[1] - v[0]
@@ -155,12 +155,13 @@ def make_diff_call(terms, V):
     return call
 
 
-def time_variant(n, dtype, device, compile, cuda_graphs, iters):
+def time_variant(n, dtype, device, compile, cuda_graphs, iters, cache_indices=False):
     if compile or cuda_graphs:
         torch._dynamo.reset()  # fresh compile cache per variant -> no cross-variant fallback
     V, F, E = plane_grid(n, dtype=dtype, device=device)
     V = (V + 0.01 * torch.randn_like(V)).requires_grad_(True)
-    terms = build_terms(V, E, dtype, device, compile=compile, cuda_graphs=cuda_graphs)
+    terms = build_terms(V, E, dtype, device, compile=compile, cuda_graphs=cuda_graphs,
+                        cache_indices=cache_indices)
     call = make_diff_call(terms, V)
     warm = warmup_cost_s(call, device)
     ms = time_ms(call, device, iters=iters, repeats=7, warmup=3)
@@ -240,11 +241,14 @@ def main():
     rows = []
     for n in args.sizes:
         base = None
-        for name, cflags in [("eager", (False, False)),
-                             ("compile", (True, False)),
-                             ("cuda_graphs", (False, True))]:
+        for name, cflags in [("eager", (False, False, False)),
+                             ("compile", (True, False, False)),
+                             ("cuda_graphs", (False, True, False)),
+                             ("compile+cache", (True, False, True)),
+                             ("cuda_graphs+cache", (False, True, True))]:
             try:
-                r = time_variant(n, dtype, device, cflags[0], cflags[1], args.iters)
+                r = time_variant(n, dtype, device, cflags[0], cflags[1], args.iters,
+                                 cache_indices=cflags[2])
             except RuntimeError as ex:
                 if "out of memory" in str(ex).lower():
                     torch.cuda.empty_cache()
