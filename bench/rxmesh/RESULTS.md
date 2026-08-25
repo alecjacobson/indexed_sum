@@ -259,7 +259,9 @@ build/bin/Param     -i grid_<n>.obj -s cg_mat_free
 build/bin/ManiOpt   -i giraffe.obj -e giraffe_embedding.obj -s newton -m 100
 ```
 
-Minimal RXMesh source touches for this headless L40 (documented, do not affect timed code):
+The exact RXMesh source changes are captured in `bench/rxmesh/rxmesh_headless.patch`
+(`git apply` from an RXMesh checkout). Minimal RXMesh source touches for this headless L40
+(documented, do not affect timed code):
 `apps/MassSpring/mass_spring_diff.cu` (new eval_terms timing harness); a `#if USE_POLYSCOPE`
 guard around one Drop-scene `registerSurfaceMesh` call in `apps/MassSpring/draw.h`; explicit
 `glm/gtx/norm.hpp` + `glm/gtc/constants.hpp` includes in `apps/ManiOpt/mean_curv.h`; and a
