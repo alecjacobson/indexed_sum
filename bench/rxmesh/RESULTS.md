@@ -41,7 +41,9 @@ numbers used only as a cross-check.
 > The paper states: *"IndexedSum performs a vectorized dense AD on the local Hessians using
 > reverse-mode AD."*
 
-This is imprecise. `IndexedSum.sparse_hessian` builds each element block with
+This is imprecise, and it describes the configuration the paper actually benchmarked — the
+**eager default** (`IndexedSum(...).sparse_hessian(...)` with no flags; the `IS eager` row in
+§3, which is what RXMesh compared against). That default builds each element block with
 `torch.func.hessian`, and PyTorch defines (verified in `torch/_functorch/eager_transforms.py`,
 and the docstring: *"via a forward-over-reverse strategy"*):
 
@@ -49,12 +51,13 @@ and the docstring: *"via a forward-over-reverse strategy"*):
 torch.func.hessian(f) == jacfwd(jacrev(f))
 ```
 
-i.e. **forward-over-reverse** — an *outer forward-mode* pass over an inner reverse-mode pass.
-It is not reverse-mode. This matters because the *outer forward mode under `vmap`* is exactly
-the path with the known `torch.linalg.det`/`slogdet` miscomputation (see `bench/RESULTS.md`
-and `tests/test_det.py`), which is why this repo ships the elementary-op `indexed_sum.det`
-helper. (The `compile`/`cuda_graphs` path instead uses reverse-over-reverse,
-`jacrev(jacrev)`.)
+i.e. **forward-over-reverse** — an *outer forward-mode* pass over an inner reverse-mode pass
+(both modes, not reverse-mode alone). This matters because the *outer forward mode under
+`vmap`* is exactly the path with the known `torch.linalg.det`/`slogdet` miscomputation (see the
+repo's `bench/RESULTS.md` and `tests/test_det.py`), which is why this repo ships the
+elementary-op `indexed_sum.det` helper. Only the *new, opt-in* `compile` / `cuda_graphs` paths
+(the faster rows in §3, which post-date the paper) use reverse-over-reverse (`jacrev(jacrev)`)
+— so "reverse-mode AD" describes those, not the benchmarked default.
 
 ---
 
