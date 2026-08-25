@@ -57,10 +57,18 @@ class IndexedSum:
         required for a *correct* Hessian, independent of compile: see `indexed_sum/det.py`).
       * First call pays a one-time compilation cost; shapes should be stable across calls to avoid
         recompilation. Best for repeated-call loops (e.g. Newton iterations). See `bench/RESULTS.md`.
+
+    Reusing the sparsity pattern (``cache_indices``)
+    ------------------------------------------------
+    ``sparse_hessian`` also rebuilds the assembled matrix's row/col index tensors on every call.
+    Those indices depend only on ``all_indices`` (the topology), so at a fixed problem they are
+    constant. ``cache_indices=True`` computes them once and reuses them (as RXMesh caches its CSR
+    pattern), a large assembly saving in repeated-call loops -- orthogonal to, and composable
+    with, ``compile``/``cuda_graphs``. Default ``False``. See `bench/rxmesh/RESULTS.md`.
     """
 
     def __init__(self, local_summand, all_indices, per_variable_constants=None, per_term_constants=None,
-                 compile=False, cuda_graphs=False):
+                 compile=False, cuda_graphs=False, cache_indices=False):
         """
         Initializes a vectorized summed function.
 
@@ -72,6 +80,11 @@ class IndexedSum:
         - compile: if True, torch.compile the batched Hessian (Inductor fusion).
         - cuda_graphs: if True, also replay via CUDA graphs (implies compilation). See the
           class docstring for how compile/cuda_graphs combine.
+        - cache_indices: if True, cache the Hessian's row/col index tensors (a pure function of
+          `all_indices`, hence fixed across calls) and reuse them, instead of rebuilding them on
+          every `sparse_hessian` call. Trades memory (a persistent `[2, nnz]` int64 tensor) for
+          speed; a large win in repeated-call loops (Newton/timestep) at fixed topology. Like
+          RXMesh, which computes its sparse pattern once. Default False (unchanged behavior).
         """
         self.local_summand = local_summand
         self.all_indices = all_indices
@@ -79,7 +92,10 @@ class IndexedSum:
         self.set_per_term_constants(per_term_constants)
         self.compile = compile
         self.cuda_graphs = cuda_graphs
+        self.cache_indices = cache_indices
         self._compiled_blocks = None  # lazily-built compiled batched-Hessian kernel
+        self._cached_indices = None   # lazily-built [2, nnz] COO index tensor (if cache_indices)
+        self._cached_indices_key = None
 
     # set per_variable_constants
     def set_per_variable_constants(self, per_variable_constants):
@@ -137,18 +153,33 @@ class IndexedSum:
         # Shape: (sum-length, local_size * dim, local_size * dim)
         batched_hessian = self._batched_hessian(args, local_size, dim)
 
-        # Compute global indices efficiently
-        global_indices = (dim * self.all_indices[:, :, None] + torch.arange(dim, device=V.device)).reshape(sum_length, local_size * dim)
-        row_indices = global_indices[:, :, None].expand(sum_length, local_size * dim, local_size * dim).reshape(-1)
-        col_indices = global_indices[:, None, :].expand(sum_length, local_size * dim, local_size * dim).reshape(-1)
+        indices = self._hessian_indices(V, local_size, dim, sum_length)
         values = batched_hessian.reshape(-1)
 
         H_sparse = torch.sparse_coo_tensor(
-            indices=torch.stack([row_indices, col_indices]),
+            indices=indices,
             values=values,
             size=(dof, dof)
         )
         return H_sparse
+
+    def _hessian_indices(self, V, local_size, dim, sum_length):
+        """The [2, nnz] COO (row, col) index tensor. Depends only on `all_indices`/`dim`, so it
+        is fixed across calls at a given topology; cached and reused when `cache_indices=True`
+        (RXMesh likewise computes its sparse pattern once)."""
+        key = (int(sum_length), int(local_size), int(dim), V.device)
+        if self.cache_indices and self._cached_indices is not None and self._cached_indices_key == key:
+            return self._cached_indices
+
+        global_indices = (dim * self.all_indices[:, :, None] + torch.arange(dim, device=V.device)).reshape(sum_length, local_size * dim)
+        row_indices = global_indices[:, :, None].expand(sum_length, local_size * dim, local_size * dim).reshape(-1)
+        col_indices = global_indices[:, None, :].expand(sum_length, local_size * dim, local_size * dim).reshape(-1)
+        indices = torch.stack([row_indices, col_indices])
+
+        if self.cache_indices:
+            self._cached_indices = indices
+            self._cached_indices_key = key
+        return indices
 
     def _batched_hessian(self, args, local_size, dim):
         """Compute the batched per-element Hessian blocks, eagerly or via torch.compile.
