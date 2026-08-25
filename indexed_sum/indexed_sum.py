@@ -48,8 +48,10 @@ class IndexedSum:
 
     Notes / caveats:
       * The compiled path uses a reverse-over-reverse Hessian (``jacrev(jacrev(g))``); the eager
-        default uses forward-over-reverse (``torch.func.hessian``). They are mathematically equal
-        (differing only at floating-point rounding).
+        default uses forward-over-reverse (``torch.func.hessian``). For well-behaved summands these
+        are mathematically equal (differing only at floating-point rounding). (For a
+        ``torch.linalg.det`` summand they differ more: forward-over-reverse is buggy -- see the
+        next note -- so the compiled reverse-mode result is actually the correct one.)
       * ``cuda_graphs=True`` cannot capture summands that trigger a host<->device sync -- notably
         `torch.linalg.det`/`slogdet`. Use `indexed_sum.det.det`/`logabsdet` instead (which are also
         required for a *correct* Hessian, independent of compile: see `indexed_sum/det.py`).
