@@ -25,8 +25,10 @@ change it.
   bringing the **1M gap to ≈1.60×** (§3a). So on equal hardware, current PyTorch, `compile`, and
   the cached pattern, the paper's **6.2× becomes ≈1.6×**.
 - A **correction to the paper's methods text**: it says IndexedSum "performs … reverse-mode
-  AD." The default path is **forward-over-reverse** (`torch.func.hessian = jacfwd∘jacrev`),
-  which uses *both* modes (details below).
+  AD." That is not the configuration the paper benchmarked — the **eager default** (`IS eager`,
+  what RXMesh compared against) is **forward-over-reverse** (`torch.func.hessian = jacfwd∘jacrev`),
+  which uses *both* modes; only the new opt-in `compile`/`cuda_graphs` paths are reverse-mode
+  (details below).
 
 Everything here is measured on **one NVIDIA L40 (48 GB), CUDA 12.6 toolkit, PyTorch
 2.11.0+cu128**, single precision (RXMesh uses `float`), medians over repeats with warmup
@@ -198,8 +200,13 @@ to a gradient-only workload.** We therefore report IndexedSum's eager autograd g
 
 Honest note: IndexedSum is a **sparse-Hessian** tool; for pure gradient descent it offers no
 Hessian to accelerate and pays per-call autograd overhead, so RXMesh is several× faster and the
-new switches change nothing. (A hypothetical *compiled-gradient* path — not in the library —
-would help; a partial what-if is in `smoothing_bench.py`.)
+`compile`/`cuda_graphs`/`cache_indices` switches (all sparse-Hessian-only) change nothing. A
+*compiled-gradient* path would help — a partial what-if is in `smoothing_bench.py`, and the
+same eager-gradient floor limits the Hessian cases too (§3a), so it is a live next step.
+
+(`cache_indices` likewise does not apply here — there is no assembled sparse matrix to cache a
+pattern for. It does apply to the two Hessian-assembling apps below, which are updated to
+include it.)
 
 ### 4b. Parameterization — symmetric Dirichlet (paper Table 2)
 RXMesh's Param uses a **matrix-free CG Newton** solver (`eval_terms_grad_only` + Hessian-vector
@@ -209,11 +216,14 @@ apples-to-oranges. What we can show cleanly is the IndexedSum derivative-provisi
 same energy, and that the new switches apply to it (this energy has a `J⁻¹` / determinant
 term):
 
-| grid n | vertices | IS eager | IS compile | IS cuda_graphs | compile speedup |
-|-------:|---------:|---------:|-----------:|---------------:|----------------:|
-| 100    | 10,000    | 10.56 ms | 2.16 ms | 1.99 ms | 4.9× |
-| 500    | 250,000   | 15.03 ms | 7.46 ms | 7.58 ms | 2.0× |
-| 1000   | 1,000,000 | 81.30 ms | 33.92 ms | 34.78 ms | 2.4× |
+| grid n | vertices | IS eager | IS compile | IS compile+cache | best speedup |
+|-------:|---------:|---------:|-----------:|-----------------:|-------------:|
+| 100    | 10,000    | 10.09 ms | 2.19 ms | 1.96 ms | 5.6× |
+| 500    | 250,000   | 15.02 ms | 7.43 ms | 5.16 ms | 2.9× |
+| 1000   | 1,000,000 | 81.29 ms | 33.89 ms | **28.94 ms** | **2.8×** |
+
+(`cache_indices` stacks with `compile` here too — e.g. 1M: 33.9 → 28.9 ms; `cuda_graphs+cache`
+is comparable. "best speedup" is the fastest configuration vs eager.)
 
 The symmetric-Dirichlet Hessian is verified against finite differences (below), computed with
 the elementary 2×2 determinant/inverse (the `indexed_sum.det` remedy) — required for
@@ -226,13 +236,13 @@ RXMesh's ManiOpt is a **Newton method with an assembled Hessian** (like mass-spr
 *is* directly analogous. Its energy contains a **3×3 determinant** (a signed volume) — the same
 family as the documented det bug. On the paper's giraffe mesh (3,130 V / 6,256 F):
 
-| | RXMesh Diff/iter | IS eager | IS compile | IS cuda_graphs |
-|-|-----------------:|---------:|-----------:|---------------:|
-| giraffe | 0.193 ms | 29.42 ms | 4.26 ms (6.9×) | 3.96 ms (7.4×) |
+| | RXMesh Diff/iter | IS eager | IS compile | IS cuda_graphs | IS cuda_graphs+cache |
+|-|-----------------:|---------:|-----------:|---------------:|---------------------:|
+| giraffe | 0.20 ms | 31.9 ms | 4.84 ms (6.6×) | 4.47 ms (7.1×) | **3.95 ms (8.1×)** |
 
 giraffe is small, so IndexedSum is deep in the overhead-bound regime where the switches help
-most (7.4×) — yet RXMesh is still ~20–150× faster at this size, consistent with the
-mass-spring small-n rows. (A larger genus-0 mesh with a sphere embedding would narrow this as
+most — `cuda_graphs+cache` reaches **8.1×** — yet RXMesh is still ~20–160× faster at this size,
+consistent with the mass-spring small-n rows. (A larger genus-0 mesh with a sphere embedding would narrow this as
 at mass-spring's 1M row; we only had giraffe's embedding to match RXMesh exactly.)
 
 ---

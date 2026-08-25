@@ -157,14 +157,16 @@ def time_all(mesh, embed, dtype, device, iters):
     F, K, nV = setup(mesh, embed, dtype, device)
     print(f"\n== per-iteration derivative cost on {os.path.basename(mesh)} "
           f"(nV={nV}, nF={F.shape[0]}): grad + sparse Hessian, ms ==")
-    print(f"{'variant':<13} {'diff_ms':>10} {'hess_ms':>10} {'warmup_s':>9} {'speedup':>8}")
+    print(f"{'variant':<18} {'diff_ms':>10} {'hess_ms':>10} {'warmup_s':>9} {'speedup':>8}")
     base = None
-    for name, cf in [("eager", (False, False)), ("compile", (True, False)),
-                     ("cuda_graphs", (False, True))]:
+    for name, cf in [("eager", (False, False, False)), ("compile", (True, False, False)),
+                     ("cuda_graphs", (False, True, False)),
+                     ("compile+cache", (True, False, True)),
+                     ("cuda_graphs+cache", (False, True, True))]:
         if cf[0] or cf[1]:
             torch._dynamo.reset()
         uv = (1e-3 * torch.randn(nV, 2, dtype=dtype, device=device)).detach().requires_grad_(True)
-        term = build_term(F, K, det_helper, compile=cf[0], cuda_graphs=cf[1])
+        term = build_term(F, K, det_helper, compile=cf[0], cuda_graphs=cf[1], cache_indices=cf[2])
 
         def diff_call():
             if uv.grad is not None:
@@ -176,7 +178,7 @@ def time_all(mesh, embed, dtype, device, iters):
         hess_ms = time_ms(lambda: term.sparse_hessian(uv), device, iters=iters, repeats=5, warmup=2)
         if name == "eager":
             base = ms
-        print(f"{name:<13} {ms:>10.3f} {hess_ms:>10.3f} {warm:>9.2f} {base / ms:>7.2f}x")
+        print(f"{name:<18} {ms:>10.3f} {hess_ms:>10.3f} {warm:>9.2f} {base / ms:>7.2f}x")
         sync(device)
         if device == "cuda":
             torch.cuda.empty_cache()

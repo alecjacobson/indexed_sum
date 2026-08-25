@@ -145,13 +145,14 @@ def correctness(device):
     return ok
 
 
-def time_variant(n, dtype, device, compile, cuda_graphs, iters):
+def time_variant(n, dtype, device, compile, cuda_graphs, iters, cache_indices=False):
     if compile or cuda_graphs:
         torch._dynamo.reset()
     V, F, E = plane_grid(n, dtype=dtype, device=device)
     Mrinv, A = rest_shapes(V, F)
     uv = (V[:, :2] + 0.01 * torch.randn(V.shape[0], 2, device=device, dtype=dtype)).detach().requires_grad_(True)
-    term = make_symdir(F, Mrinv, A, elementary=True, compile=compile, cuda_graphs=cuda_graphs)
+    term = make_symdir(F, Mrinv, A, elementary=True, compile=compile, cuda_graphs=cuda_graphs,
+                       cache_indices=cache_indices)
 
     def diff_call():
         if uv.grad is not None:
@@ -185,17 +186,19 @@ def main():
         return
     torch._dynamo.reset()
     print("\n== per-iteration derivative cost: grad + sparse Hessian, ms ==")
-    print(f"{'n':>6} {'nV':>9} {'nF':>9} {'variant':<13} {'diff_ms':>10} {'hess_ms':>10} "
+    print(f"{'n':>6} {'nV':>9} {'nF':>9} {'variant':<18} {'diff_ms':>10} {'hess_ms':>10} "
           f"{'warmup_s':>9} {'speedup':>8}")
     for n in args.sizes:
         base = None
-        for name, cf in [("eager", (False, False)), ("compile", (True, False)),
-                         ("cuda_graphs", (False, True))]:
-            r = time_variant(n, dtype, device, cf[0], cf[1], args.iters)
+        for name, cf in [("eager", (False, False, False)), ("compile", (True, False, False)),
+                         ("cuda_graphs", (False, True, False)),
+                         ("compile+cache", (True, False, True)),
+                         ("cuda_graphs+cache", (False, True, True))]:
+            r = time_variant(n, dtype, device, cf[0], cf[1], args.iters, cache_indices=cf[2])
             if name == "eager":
                 base = r["ms"]
             sp = base / r["ms"] if base else 1.0
-            print(f"{n:>6} {r['nV']:>9} {r['nF']:>9} {name:<13} {r['ms']:>10.3f} "
+            print(f"{n:>6} {r['nV']:>9} {r['nF']:>9} {name:<18} {r['ms']:>10.3f} "
                   f"{r['hess_ms']:>10.3f} {r['warmup_s']:>9.2f} {sp:>7.2f}x")
             sync(device)
             if device == "cuda":
