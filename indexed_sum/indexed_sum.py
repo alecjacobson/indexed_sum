@@ -21,17 +21,18 @@ class IndexedSum:
         all_indices (tensor or array-like): The indices defining the structure of the sum.
         per_variable_constants (tensor, optional): A tensor of shape `(num_vars, k_dim)`, containing constants associated with variables.
         per_term_constants (tensor, optional): A tensor of shape `(sum-length, |c|)`, containing constants specific to each term.
-        compile (bool, optional): Speed up `sparse_hessian` with `torch.compile`. See below.
+        compile (bool, optional): Speed up `sparse_hessian`/`dense_gradient` with `torch.compile`. See below.
         cuda_graphs (bool, optional): Additionally replay via CUDA graphs. See below.
 
-    Speeding up ``sparse_hessian`` (``compile`` / ``cuda_graphs``)
-    -------------------------------------------------------------
-    `sparse_hessian` computes a batched per-element Hessian, which is many small autograd
-    graphs -- a workload dominated by kernel-launch overhead. Two opt-in, *layered* switches
-    cut that overhead (both default ``False``, i.e. plain eager):
+    Speeding up ``sparse_hessian`` / ``dense_gradient`` (``compile`` / ``cuda_graphs``)
+    ---------------------------------------------------------------------------------
+    Both `sparse_hessian` and `dense_gradient` compute a batched per-element quantity (Hessian
+    blocks / gradient blocks), which is many small autograd graphs -- a workload dominated by
+    kernel-launch overhead. Two opt-in, *layered* switches cut that overhead (both default
+    ``False``, i.e. plain eager):
 
-      * ``compile=True`` -- run the batched Hessian through ``torch.compile`` (Inductor kernel
-        fusion). ~30-50x on an L40 for cheap summands.
+      * ``compile=True`` -- run the batched Hessian/gradient through ``torch.compile`` (Inductor
+        kernel fusion). ~30-50x on an L40 for cheap summands.
       * ``cuda_graphs=True`` -- *also* record the launches into a CUDA graph and replay them
         (``torch.compile(mode="reduce-overhead")``). Fastest when it applies (up to ~85x), but
         it can only capture summands with no host<->device sync.
@@ -47,11 +48,13 @@ class IndexedSum:
       | any     | True        | torch.compile + CUDA graphs (fastest)      |
 
     Notes / caveats:
-      * The compiled path uses a reverse-over-reverse Hessian (``jacrev(jacrev(g))``); the eager
-        default uses forward-over-reverse (``torch.func.hessian``). For well-behaved summands these
-        are mathematically equal (differing only at floating-point rounding). (For a
-        ``torch.linalg.det`` summand they differ more: forward-over-reverse is buggy -- see the
-        next note -- so the compiled reverse-mode result is actually the correct one.)
+      * The compiled Hessian path uses a reverse-over-reverse Hessian (``jacrev(jacrev(g))``);
+        the eager default uses forward-over-reverse (``torch.func.hessian``). For well-behaved
+        summands these are mathematically equal (differing only at floating-point rounding). (For
+        a ``torch.linalg.det`` summand they differ more: forward-over-reverse is buggy -- see the
+        next note -- so the compiled reverse-mode result is actually the correct one.) The
+        gradient path is plain reverse-mode (``jacrev(g)``) in both eager and compiled forms, so
+        no such reformulation is needed and the compiled gradient matches the eager one exactly.
       * ``cuda_graphs=True`` cannot capture summands that trigger a host<->device sync -- notably
         `torch.linalg.det`/`slogdet`. Use `indexed_sum.det.det`/`logabsdet` instead (which are also
         required for a *correct* Hessian, independent of compile: see `indexed_sum/det.py`).
@@ -64,7 +67,8 @@ class IndexedSum:
     Those indices depend only on ``all_indices`` (the topology), so at a fixed problem they are
     constant. ``cache_indices=True`` computes them once and reuses them (as RXMesh caches its CSR
     pattern), a large assembly saving in repeated-call loops -- orthogonal to, and composable
-    with, ``compile``/``cuda_graphs``. Default ``False``. See `bench/rxmesh/RESULTS.md`.
+    with, ``compile``/``cuda_graphs``. Default ``False``. See `bench/rxmesh/RESULTS.md`. The same
+    per-element global-DOF index map drives ``dense_gradient``'s scatter, so it is cached too.
     """
 
     def __init__(self, local_summand, all_indices, per_variable_constants=None, per_term_constants=None,
@@ -94,8 +98,11 @@ class IndexedSum:
         self.cuda_graphs = cuda_graphs
         self.cache_indices = cache_indices
         self._compiled_blocks = None  # lazily-built compiled batched-Hessian kernel
+        self._compiled_grad = None    # lazily-built compiled batched-gradient kernel
         self._cached_indices = None   # lazily-built [2, nnz] COO index tensor (if cache_indices)
         self._cached_indices_key = None
+        self._cached_grad_indices = None  # lazily-built flat scatter index map (if cache_indices)
+        self._cached_grad_indices_key = None
 
     # set per_variable_constants
     def set_per_variable_constants(self, per_variable_constants):
@@ -210,6 +217,83 @@ class IndexedSum:
         # the values escape into the returned sparse tensor. (Not needed for plain fusion.)
         return out.clone() if self.cuda_graphs else out
 
+    def dense_gradient(self, V):
+        """
+        Computes the dense gradient vector of `f` by assembling per-element gradients.
+
+        Equivalent to ``torch.autograd.grad(self(V).sum(), V)[0].reshape(-1)`` (the eager
+        autograd gradient), but computed as a batched per-element Jacobian that is scattered
+        into the global vector -- the same structure as `sparse_hessian`, and accelerated by the
+        same opt-in ``compile``/``cuda_graphs`` switches (see the class docstring). Unlike the
+        Hessian, the gradient is plain reverse-mode (``vmap(jacrev(g))``), which compiles cleanly
+        under dynamo, so no reformulation is needed.
+
+        Parameters:
+        - V: Tensor of shape `[num_vars, dim]`.
+
+        Returns:
+        - Dense gradient as a flat tensor of shape `[num_vars * dim]`.
+        """
+        num_vars, dim = V.shape
+        sum_length, local_size = self.all_indices.shape
+        dof = num_vars * dim  # Total degrees of freedom
+
+        args = self.prepare_args(V)
+        # Shape: (sum-length, local_size * dim)
+        batched_grad = self._batched_gradient(args, local_size, dim)
+
+        # Flat global-DOF index of each per-element gradient entry; scatter-add into the vector.
+        scatter_index = self._gradient_indices(V, local_size, dim, sum_length)
+        grad = torch.zeros(dof, dtype=batched_grad.dtype, device=V.device)
+        grad.index_add_(0, scatter_index, batched_grad.reshape(-1))
+        return grad
+
+    def _gradient_indices(self, V, local_size, dim, sum_length):
+        """The flat `[sum_length * local_size * dim]` scatter-target index of each per-element
+        gradient entry (its global DOF). This is exactly the `global_indices` map that
+        `_hessian_indices` builds, flattened -- fixed across calls at a given topology; cached
+        and reused when `cache_indices=True`."""
+        key = (int(sum_length), int(local_size), int(dim), V.device)
+        if (self.cache_indices and self._cached_grad_indices is not None
+                and self._cached_grad_indices_key == key):
+            return self._cached_grad_indices
+
+        global_indices = (dim * self.all_indices[:, :, None] + torch.arange(dim, device=V.device)).reshape(-1)
+
+        if self.cache_indices:
+            self._cached_grad_indices = global_indices
+            self._cached_grad_indices_key = key
+        return global_indices
+
+    def _batched_gradient(self, args, local_size, dim):
+        """Compute the batched per-element gradient blocks, eagerly or via torch.compile.
+
+        Both eager and compiled paths use reverse-mode `vmap(jacrev(g))`, which compiles cleanly
+        under dynamo -- so, unlike `_batched_hessian`, no forward/reverse reformulation is needed
+        and the compiled result matches the eager one to floating-point rounding.
+        """
+        def reshaped_summand(inputs, *rest):
+            return self.local_summand(inputs.view(local_size, dim), *rest)
+
+        # cuda_graphs implies compilation; either switch selects the compiled path.
+        if not (self.compile or self.cuda_graphs):
+            return vmap(jacrev(reshaped_summand))(*args).reshape(args[0].shape[0], local_size * dim)
+
+        if self._compiled_grad is None:
+            mode = "reduce-overhead" if self.cuda_graphs else None
+
+            def grad_blocks(*a):
+                return vmap(jacrev(reshaped_summand))(*a)
+
+            # dynamic=False: specialize on concrete shapes (fixed per problem), matching the
+            # batched-Hessian kernel.
+            self._compiled_grad = torch.compile(grad_blocks, mode=mode, dynamic=False)
+
+        out = self._compiled_grad(*args).reshape(args[0].shape[0], local_size * dim)
+        # CUDA-graph outputs alias reused memory the next call overwrites; clone before the values
+        # escape into the returned gradient vector. (Not needed for plain fusion.)
+        return out.clone() if self.cuda_graphs else out
+
     def __add__(self, other):
         if isinstance(other, IndexedSum):
             return SumNode(self, other)  # Create a tree node instead of a list-based collection
@@ -236,6 +320,11 @@ class SumNode:
         # Should they be coalesced before adding?
         # Does that depend on whether using coo or csr?
         return self.left.sparse_hessian(V) + self.right.sparse_hessian(V)  # Efficient summation
+
+    def dense_gradient(self, V):
+        if self.right is None:
+            return self.left.dense_gradient(V)
+        return self.left.dense_gradient(V) + self.right.dense_gradient(V)
 
     def __add__(self, other):
         return SumNode(self, other)  # Create a new tree node instead of copying lists
