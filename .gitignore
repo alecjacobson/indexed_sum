@@ -5,3 +5,7 @@ indexed_sum.egg-info
 *~
 dist/
 build/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+bench/sweep.log
