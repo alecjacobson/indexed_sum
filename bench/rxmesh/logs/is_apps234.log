@@ -1,0 +1,54 @@
+### SMOOTHING (IndexedSum gradient) ###
+device=cuda dtype=f32 gpu=NVIDIA L40
+
+== correctness gate (grid n=6, f64): gradient vs finite differences ==
+  grad autograd vs FD  relerr = 3.44e-10  => PASS
+
+== gradient time per iteration, ms (edge energy |x0-x1|^2) ==
+     n        nV        nE  IS_eager_grad  (whatif_compiled)
+   100     10000     29601          0.450              0.094
+   500    250000    748001          0.483              0.095
+  1000   1000000   2996001          2.883              0.382
+
+### PARAM (IndexedSum symmetric-Dirichlet, grad+sparse Hessian) ###
+device=cuda dtype=f32 gpu=NVIDIA L40
+
+== correctness gate (grid n=6, f64): symmetric Dirichlet ==
+  elementary-det eager Hessian vs FD   relerr = 5.01e-06
+  compile vs eager                     relerr = 6.57e-16
+  cuda_graphs vs eager                 relerr = 6.57e-16
+  [bug demo] torch.linalg.det vs FD    relerr = 5.01e-06  (unexpectedly ok)
+  => PASS
+
+== per-iteration derivative cost: grad + sparse Hessian, ms ==
+     n        nV        nF variant          diff_ms    hess_ms  warmup_s  speedup
+   100     10000     19602 eager             10.974      8.424      0.34    1.00x
+   100     10000     19602 compile            2.125      0.601      3.88    5.16x
+   100     10000     19602 cuda_graphs        1.950      0.442      1.94    5.63x
+
+   500    250000    498002 eager             15.014     13.517      0.02    1.00x
+   500    250000    498002 compile           10.105      7.969      2.28    1.49x
+   500    250000    498002 cuda_graphs       10.656      7.749      1.64    1.41x
+
+  1000   1000000   1996002 eager             84.603     74.082      0.09    1.00x
+  1000   1000000   1996002 compile           33.891     26.160      2.02    2.50x
+  1000   1000000   1996002 cuda_graphs       34.786     27.110      1.55    2.43x
+
+
+### MANIOPT (IndexedSum spherical, grad+sparse Hessian) ###
+device=cuda dtype=f32 gpu=NVIDIA L40
+
+== correctness gate (giraffe, f64): manifold-opt spherical energy ==
+  patch: 31 feasible faces, 35 verts
+  grad autograd vs FD                  relerr = 2.13e-06
+  elementary-det eager Hessian vs FD   relerr = 6.62e-04
+  compile vs eager                     relerr = 6.74e-13
+  cuda_graphs vs eager                 relerr = 6.74e-13
+  torch.linalg.det vs helper (eager)   relerr = 1.07e-12  (agree -> bug does NOT trigger here)
+  => PASS
+
+== per-iteration derivative cost on giraffe.obj (nV=3130, nF=6256): grad + sparse Hessian, ms ==
+variant          diff_ms    hess_ms  warmup_s  speedup
+eager             28.920     25.540      0.04    1.00x
+compile            4.330      0.864      6.23    6.68x
+cuda_graphs        3.976      0.528      5.40    7.27x

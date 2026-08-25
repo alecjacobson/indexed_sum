@@ -1,0 +1,14 @@
+### RXMesh Smoothing (edge-based) on grids, ms/iter ###
+grid_100 Smoothing GD took 9.9616 (ms), ms/iter = 0.0199232
+Smoothing GD took 622.6641 (ms), ms/iter = 1.2453282
+grid_500 Smoothing GD took 88.33053 (ms), ms/iter = 0.17666106
+Smoothing GD took 622.72705 (ms), ms/iter = 1.2454541
+grid_1000 Smoothing GD took 205.1753 (ms), ms/iter = 0.4103506
+Smoothing GD took 643.4666 (ms), ms/iter = 1.2869332
+
+### RXMesh Param (cg_mat_free) on grids ###
+grid_100 iterations =100, num_cg_iter= 1001, time= 2755.5933 (ms), timer/iteration= 27.555933 ms/iter, diff_cg_time/iter = 18.522263
+grid_500 iterations =100, num_cg_iter= 1001, time= 13054.283 (ms), timer/iteration= 130.54283 ms/iter, diff_cg_time/iter = 99.66633
+
+### RXMesh ManiOpt (newton) on giraffe ###
+iterations =100, time= 5782.041 (ms), diff_time= 20.621252 (ms)

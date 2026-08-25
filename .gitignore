@@ -9,3 +9,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 bench/sweep.log
+# RXMesh comparison study artifacts
+bench/rxmesh/grids/
+RXMesh.log
