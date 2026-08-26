@@ -261,4 +261,35 @@ Both default to `False`. Note `cuda_graphs` requires a summand free of host↔de
 syncs — another reason to use `indexed_sum.det.det` rather than `torch.linalg.det`.
 See `bench/RESULTS.md` for the full study.
 
+## Reusing the sparsity pattern with `cache_indices`
+
+Beyond the per-element block compute, `sparse_hessian` assembles the result by
+building the matrix's row/col index tensors — but those depend only on
+`all_indices` (the mesh topology), so at a fixed problem they are **constant across
+every call**. `cache_indices=True` computes them once and reuses them, the same
+"pattern computed once" strategy sparse solvers use:
+
+```python
+f = IndexedSum(neohookean, T, compile=True, cache_indices=True)
+H = f.sparse_hessian(x)   # index tensors built once, then reused each call
+```
+
+It is numerically identical to the default, composes with `compile`/`cuda_graphs`,
+and trades a persistent `[2, nnz]` index tensor for the per-call rebuild — a large
+assembly saving in fixed-topology solve loops (at 1M vertices it roughly halves the
+`compile` assembly time). Defaults to `False`.
+
+## Compiling the gradient with `dense_gradient`
+
+`compile`/`cuda_graphs`/`cache_indices` all target `sparse_hessian`; the gradient
+via `energy(x).backward()` stays eager. `IndexedSum.dense_gradient(x)` assembles the
+dense gradient vector from per-element gradients the same way, and honors the same
+flags — so the gradient is compilable and CUDA-graph capturable too (useful when the
+gradient dominates, e.g. gradient-descent loops):
+
+```python
+f = IndexedSum(energy, T, compile=True, cache_indices=True)
+g = f.dense_gradient(x)   # equals autograd's gradient; compiled/captured
+```
+
 _You might also be interested in https://github.com/alecjacobson/tinyremo and https://github.com/alecjacobson/pytorch-sparse-solve_
