@@ -1,0 +1,177 @@
+diff --git a/apps/ManiOpt/mean_curv.h b/apps/ManiOpt/mean_curv.h
+index c746041..b0bfb1c 100644
+--- a/apps/ManiOpt/mean_curv.h
++++ b/apps/ManiOpt/mean_curv.h
+@@ -1,6 +1,12 @@
+ #pragma once
+ #include "rxmesh/rxmesh_static.h"
+ 
++// glm::distance2 (gtx/norm) and glm::pi (gtc/constants) are not pulled in transitively by
++// the glm version CPM fetches here; include them explicitly for a headless build.
++#define GLM_ENABLE_EXPERIMENTAL
++#include <glm/gtx/norm.hpp>
++#include <glm/gtc/constants.hpp>
++
+ using namespace rxmesh;
+ 
+ template <typename T>
+diff --git a/apps/MassSpring/CMakeLists.txt b/apps/MassSpring/CMakeLists.txt
+index 2414f11..c47ae83 100644
+--- a/apps/MassSpring/CMakeLists.txt
++++ b/apps/MassSpring/CMakeLists.txt
+@@ -12,3 +12,9 @@ rxmesh_add_app(MassSpring
+     SOURCES ${SOURCE_LIST}
+     LIBS RXMesh CLI11::CLI11
+ )
++
++# Minimal harness that times eval_terms() (grad+Hessian assembly) in isolation.
++rxmesh_add_app(MassSpringDiff
++    SOURCES mass_spring_diff.cu inertial_energy.h mass_spring_energy.h gravity_energy.h
++    LIBS RXMesh CLI11::CLI11
++)
+diff --git a/apps/MassSpring/draw.h b/apps/MassSpring/draw.h
+index 6831c9c..2801823 100644
+--- a/apps/MassSpring/draw.h
++++ b/apps/MassSpring/draw.h
+@@ -44,7 +44,9 @@ void draw_collision_sphere_polyscope(
+         p[2] = (T(p[2]) - mz) * s + center.z();        
+     }
+ 
++#if USE_POLYSCOPE
+     polyscope::registerSurfaceMesh(ps_name, V, F);
++#endif
+ }
+ 
+ template <typename FunT, typename VAttrT>
+diff --git a/apps/MassSpring/mass_spring_diff.cu b/apps/MassSpring/mass_spring_diff.cu
+new file mode 100644
+index 0000000..1aa23ed
+--- /dev/null
++++ b/apps/MassSpring/mass_spring_diff.cu
+@@ -0,0 +1,126 @@
++// Minimal timing harness for the mass-spring "Diff" quantity (gradient + Hessian
++// assembly = problem.eval_terms()), isolated from the linear solver / line search.
++//
++// This measures *exactly* the quantity RXMesh's MassSpring app reports as the "Diff"
++// timer and that the RXMesh AD paper's Table 1 reports (per-evaluation grad+Hessian
++// assembly, excluding the solve). Isolating it lets us scale to 1M-vertex grids without
++// paying the (Table-1-excluded, here CPU-fallback) direct-solver cost. The energy terms
++// and constants are identical to apps/MassSpring/mass_spring.cu (Flag scene).
++#include <CLI/CLI.hpp>
++
++#include "rxmesh/rxmesh_static.h"
++#include "rxmesh/geometry_factory.h"
++#include "rxmesh/diff/diff_scalar_problem.h"
++#include "rxmesh/util/log.h"
++
++#include "gravity_energy.h"
++#include "inertial_energy.h"
++#include "mass_spring_energy.h"
++
++using namespace rxmesh;
++
++template <typename T>
++void bench_diff(RXMeshStatic& rx, int num_eval, int warmup)
++{
++    RXMESH_INFO("#Faces: {}, #Vertices: {}", rx.get_num_faces(),
++                rx.get_num_vertices());
++
++    constexpr int      VariableDim  = 3;
++    constexpr uint32_t blockThreads = 256;
++    using ProblemT = DiffScalarProblem<T, VariableDim, VertexHandle, true>;
++
++    const T rho = 100;    // density
++    const T k   = 4e4;    // stiffness
++    const T h   = 0.01;   // time step
++
++    glm::vec3 bb_lower(0), bb_upper(0);
++    rx.bounding_box(bb_lower, bb_upper);
++    glm::vec3 bb = bb_upper - bb_lower;
++
++    T mass = 1;
++    if (bb[2] < 1e-5) {
++        mass = rho * bb[0] * bb[1] / rx.get_num_vertices();
++    } else if (bb[1] < 1e-5) {
++        mass = rho * bb[2] * bb[0] / rx.get_num_vertices();
++    } else if (bb[0] < 1e-5) {
++        mass = rho * bb[1] * bb[2] / rx.get_num_vertices();
++    }
++
++    ProblemT problem(rx, true);
++
++    auto rest_l = *rx.add_edge_attribute<T>("RestLen", 1);
++    auto x      = *rx.get_input_vertex_coordinates();
++    auto& x_tilde = *problem.opt_var;
++    x_tilde.copy_from(x, DEVICE, DEVICE);
++
++    // rest length = squared edge length (matches mass_spring.cu)
++    rx.for_each<Op::EV, blockThreads>(
++        [=] __device__(const EdgeHandle& eh, const VertexIterator& iter) {
++            Eigen::Vector3<T> a = x.to_eigen<3>(iter[0]);
++            Eigen::Vector3<T> b = x.to_eigen<3>(iter[1]);
++            rest_l(eh)          = (a - b).squaredNorm();
++        });
++
++    // identical energy terms
++    inertial_energy(problem, x, mass);
++    mass_spring_energy(problem, rest_l, h, k);
++    gravity_energy(problem, x, h, mass);
++
++    // warmup
++    for (int i = 0; i < warmup; ++i) {
++        problem.eval_terms();
++    }
++    cudaDeviceSynchronize();
++
++    // timed loop: total device time over num_eval eval_terms() calls
++    GPUTimer timer;
++    timer.start();
++    for (int i = 0; i < num_eval; ++i) {
++        problem.eval_terms();
++    }
++    timer.stop();
++    cudaDeviceSynchronize();
++
++    const float total_ms = timer.elapsed_millis();
++    RXMESH_INFO("DiffBench: #V= {}, #E= {}, #F= {}, num_eval= {}, total= {} (ms), "
++                "Diff/eval= {} (ms)",
++                rx.get_num_vertices(),
++                rx.get_num_edges(),
++                rx.get_num_faces(),
++                num_eval,
++                total_ms,
++                total_ms / float(num_eval));
++}
++
++int main(int argc, char** argv)
++{
++    using T = float;
++    CLI::App app{"MassSpringDiff - time grad+Hessian assembly (eval_terms) only"};
++
++    int      n         = 16;
++    int      num_eval  = 50;
++    int      warmup    = 10;
++    uint32_t device_id = 0;
++    app.add_option("-n,--grid_size", n, "Grid size (vertices = n*n)")->default_val(16);
++    app.add_option("-e,--num_eval", num_eval, "Number of timed eval_terms calls")
++        ->default_val(50);
++    app.add_option("-w,--warmup", warmup, "Warmup eval_terms calls")->default_val(10);
++    app.add_option("-d,--device_id", device_id, "GPU device ID")->default_val(0u);
++    try {
++        app.parse(argc, argv);
++    } catch (const CLI::ParseError& e) {
++        return app.exit(e);
++    }
++
++    rx_init(device_id);
++    RXMESH_INFO("grid_size= {}, num_eval= {}, warmup= {}", n, num_eval, warmup);
++
++    std::vector<std::vector<T>>        verts;
++    std::vector<std::vector<uint32_t>> fv;
++    T                                  dx = 1 / T(n - 1);
++    create_plane(verts, fv, n, n, 2, dx, false, vec3<float>(0, 0, 0));
++    RXMeshStatic rx(fv);
++    rx.add_vertex_coordinates(verts, "Coords");
++    bench_diff<T>(rx, num_eval, warmup);
++    return 0;
++}
